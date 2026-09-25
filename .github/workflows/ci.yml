@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - 'main'
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+  pull_request:
+    branches:
+      - 'main'
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test & Validate
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install System Dependencies
+        uses: ./.github/actions/setup-apt
+        with:
+          packages: libqt6gui6 desktop-file-utils appstream
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Validate Version Consistency Across Manifests
+        run: |
+          python3 scripts/sync_version.py --check
+
+      - name: Validate Stable Version on Main PRs
+        if: github.base_ref == 'main'
+        run: |
+          VERSION=$(cat VERSION)
+          if [[ "$VERSION" =~ -(alpha|beta|rc|dev) ]]; then
+            echo "::warning title=Pre-release Version on PR::This PR contains pre-release version '$VERSION'. Remember to run 'python3 scripts/sync_version.py --graduate' before tagging a stable release."
+          fi
+
+      - name: Validate Desktop Entry and Metainfo
+        run: |
+          desktop-file-validate flatpak/bd.com.zihad.BengalDownloadManager.desktop
+          appstreamcli validate flatpak/bd.com.zihad.BengalDownloadManager.metainfo.xml
+
+      - name: Run Test Suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONPATH: src
+        run: |
+          pytest -v tests/

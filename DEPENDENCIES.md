@@ -1,0 +1,89 @@
+# Dependencies
+
+This document lists all the dependencies required to build and run **Bengal Download Manager**.
+
+## 1. System Dependencies (Linux)
+
+Before installing Python packages, ensure your system has the following installed:
+
+- **Python 3.10+**: The core language runtime.
+- **Qt6 Libraries**: Required by PyQt6 for the GUI.
+- **Aria2**: The high-performance download engine (optional but highly recommended).
+
+### Installation on Ubuntu/Debian:
+```bash
+sudo apt update
+sudo apt install python3 python3-pip python3-venv aria2 libqt6gui6
+```
+
+### Installation on Fedora:
+```bash
+sudo dnf install python3 python3-pip aria2 qt6-qtbase-gui
+```
+
+### Installation on Arch Linux:
+```bash
+sudo pacman -S python python-pip aria2 qt6-base
+```
+
+---
+
+## 2. Python Dependencies
+
+These are declared in `pyproject.toml` and should be installed in a virtual environment.
+
+| Package | Purpose |
+|---------|---------|
+| `PyQt6` | The GUI framework used for the IDM-style interface. |
+| `python-socks[asyncio]` | Local SOCKS4/SOCKS5 proxy adapter bridge for Aria2. |
+| `pyinstaller` | Used to bundle the application into a standalone executable. |
+| `pytest` | Framework for running automated tests. |
+| `pytest-qt` | Plugin for testing Qt applications. |
+
+### Installation (using `uv`):
+```bash
+# Create virtual environment with uv
+uv venv
+
+# Install project dependencies with development/testing extras
+uv pip install -e ".[dev]"
+```
+
+---
+
+## 3. Build Tools
+
+- **CMake (3.12+)**: Used to orchestrate the build process and PyInstaller bundling.
+- **PyInstaller**: Invoked via CMake to create the final executable in `build/dist/`.
+
+---
+
+## 4. Browser Integration (Optional)
+
+The Chrome/Firefox extension requires:
+- A modern browser (Chrome, Edge, Firefox, Brave, etc.).
+- The extension files located in the `extension/` directory.
+- The application must be running to receive downloads via the local TCP port (56900).
+
+---
+
+## 5. Development Utilities
+
+- **xdg-utils**: Used for "Open Folder" and "Open File" functionality on Linux to interact with your file manager (Nautilus, Dolphin, etc.).
+
+---
+
+## 6. Snap Package Build (core26)
+
+To build the Snap package targeting Ubuntu `core26` (multi-arch `amd64` / `arm64`):
+
+```bash
+# Install Snapcraft
+sudo snap install snapcraft --classic
+
+# Build using the automated script
+bash scripts/build_snap.sh
+
+# Or build directly via Snapcraft
+snapcraft --destructive-mode  # (or snapcraft for container build)
+```

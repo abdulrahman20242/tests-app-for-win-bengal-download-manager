@@ -1,0 +1,53 @@
+# Virtual Environments
+venv/
+env/
+.env
+.venv/
+
+# Python compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Distribution / Packaging
+dist/
+.pyinstaller-build/
+build_output/
+build/*/output/
+build/*-release/
+build/*-debug/
+!build/
+*.egg-info/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# OS specific files (Mac/Windows)
+.DS_Store
+Thumbs.db
+
+# custom
+docs/*
+!docs/*.md
+!docs/adr/
+!docs/adr/*.md
+.superpowers/
+.worktrees/
+.agents/
+extension-firefox.xpi
+conductor/
+build_test/
+!tests/
+flatpak_app_dir/
+AppDir/
+appimagetool.AppImage
+linuxdeploy.AppImage
+linuxdeploy-plugin-appimage.AppImage
+*.AppImage
+*.AppImage.zsync
+test_app.py
+opencode.json
+.flatpak-builder/
+*.flatpak
+repo/

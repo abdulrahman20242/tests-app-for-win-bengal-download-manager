@@ -1,0 +1,61 @@
+from PyQt6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox, QApplication
+)
+
+class DeleteDialog(QDialog):
+    def __init__(self, count, is_completed=False, parent=None, default_delete_disk=None):
+        super().__init__(parent)
+        self.setWindowTitle("Delete Completed Downloads" if is_completed else "Delete")
+        self.setWindowIcon(QApplication.windowIcon())
+        self.setFixedWidth(420)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+        
+        # Message Label
+        message = QLabel(f"Are you sure you want to delete {count} {'completed ' if is_completed else 'selected '}download(s)?")
+        message.setWordWrap(True)
+        layout.addWidget(message)
+        
+        # Checkbox for Disk Deletion
+        self.chk_delete_disk = QCheckBox("Also delete files from disk (permanently)")
+        if default_delete_disk is None:
+            if parent and hasattr(parent, "settings") and isinstance(parent.settings, dict):
+                default_delete_disk = parent.settings.get("precheck_delete_files_from_disk", False)
+            elif parent and hasattr(parent, "precheck_delete_files_from_disk"):
+                default_delete_disk = getattr(parent, "precheck_delete_files_from_disk", False)
+            else:
+                try:
+                    from core.config import load_category_config
+                    cfg = load_category_config()
+                    default_delete_disk = cfg.get("precheck_delete_files_from_disk", False)
+                except Exception:
+                    default_delete_disk = False
+        self.chk_delete_disk.setChecked(bool(default_delete_disk))
+        layout.addWidget(self.chk_delete_disk)
+        
+        layout.addSpacing(5)
+        
+        # Button Layout
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        
+        self.btn_yes = QPushButton("Yes")
+        self.btn_yes.setFixedWidth(80)
+        self.btn_yes.setFixedHeight(30)
+        self.btn_yes.setDefault(True)
+        self.btn_yes.clicked.connect(self.accept)
+        
+        self.btn_no = QPushButton("No")
+        self.btn_no.setFixedWidth(80)
+        self.btn_no.setFixedHeight(30)
+        self.btn_no.clicked.connect(self.reject)
+        
+        btn_layout.addWidget(self.btn_yes)
+        btn_layout.addWidget(self.btn_no)
+        
+        layout.addLayout(btn_layout)
+
+    def should_delete_from_disk(self):
+        return self.chk_delete_disk.isChecked()

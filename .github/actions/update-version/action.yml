@@ -1,0 +1,19 @@
+name: 'Update Version'
+description: 'Updates src/core/version.py and AppStream metainfo XML with release version'
+inputs:
+  version:
+    description: 'Release version string (e.g., 0.1.20-alpha.16 or 0.1.21)'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Write Version File and Update Metainfo XML
+      shell: bash
+      run: |
+        VER="${{ inputs.version }}"
+        if [ -n "$VER" ]; then
+          python3 scripts/sync_version.py --set "$VER"
+        else
+          echo "No version provided to update-version action."
+        fi
