@@ -1,7 +1,7 @@
 import os
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QComboBox, QFormLayout, QApplication, QCheckBox
+    QComboBox, QFormLayout, QApplication
 )
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt
@@ -10,9 +10,8 @@ from core.config import load_category_config
 from core.memory_guard import MemoryGuard
 
 class DownloadFileInfoDialog(QDialog):
-    def __init__(self, file_info, parent=None, existing_paths=None, existing_names=None, force_copy=False, main_window=None):
+    def __init__(self, file_info, parent=None, existing_paths=None, existing_names=None, force_copy=False):
         super().__init__(parent)
-        self.main_window = main_window or (parent if hasattr(parent, "settings") else None)
         MemoryGuard.auto_manage_dialog(self)
         self.setWindowTitle("Download File Info")
         self.setWindowIcon(QApplication.windowIcon())
@@ -84,14 +83,8 @@ class DownloadFileInfoDialog(QDialog):
         
         self.layout.addLayout(form_layout)
         
-        self.chk_dont_show = QCheckBox("Don't show this dialog again (start downloads directly)")
-        self.chk_dont_show.setToolTip("Skip this confirmation window and start downloads directly in the future (can be re-enabled in Options \u2192 Downloads)")
-        self.chk_dont_show.setChecked(False)
-        self.layout.addWidget(self.chk_dont_show)
-        
         self.auto_detect_category()
         self.update_save_path()
-        self.category_combo.activated.connect(lambda: setattr(self, "_category_manually_changed", True))
         self.category_combo.currentTextChanged.connect(self.update_save_path)
         self.save_input.textChanged.connect(self.on_save_input_changed)
         
@@ -136,19 +129,7 @@ class DownloadFileInfoDialog(QDialog):
         display_size = f"{size_str},  File type: {file_type}" if file_type and file_type != "Unknown Type" else size_str
         self.lbl_size.setText(display_size)
 
-    def update_file_info(self, size_str: str = "", size_bytes: int = 0, filename: str = ""):
-        """Update file info dialog fields when asynchronous metadata probe finishes."""
-        if size_str:
-            self.file_info["size_str"] = size_str
-        if size_bytes:
-            self.file_info["size_bytes"] = size_bytes
-        if filename and not getattr(self, "_save_path_manually_edited", False):
-            self.file_info["filename"] = filename
-            self.update_save_path()
-        self._refresh_size_label()
-
     def on_save_input_changed(self, text):
-        setattr(self, "_save_path_manually_edited", True)
         new_name = os.path.basename(text.strip())
         if new_name:
             self.file_info["filename"] = new_name
@@ -167,9 +148,7 @@ class DownloadFileInfoDialog(QDialog):
         cat = self.category_combo.currentText()
         categories = self.config.get("categories", {})
         
-        if not getattr(self, "_category_manually_changed", False) and self.file_info.get("custom_save_dir") and os.path.exists(self.file_info.get("custom_save_dir")):
-            base_dir = self.file_info["custom_save_dir"]
-        elif cat in categories:
+        if cat in categories:
             base_dir = categories[cat]["path"]
         else:
             base_dir = get_user_downloads_dir()
@@ -194,6 +173,16 @@ class DownloadFileInfoDialog(QDialog):
         folder = os.path.dirname(current_text) if current_text else get_user_downloads_dir()
         filename = os.path.basename(current_text) if current_text else self.file_info.get("filename", "")
         path = choose_portal_save_path("Save File As", filename, folder)
+        if path is None:
+            # choose_portal_save_path() is XDG-portal/QtDBus-only and always returns
+            # None on Windows -- fall back to Qt's own cross-platform native dialog.
+            from PyQt6.QtWidgets import QFileDialog
+            path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save File As",
+                os.path.join(folder, filename),
+                "All Files (*)"
+            )
         if path:
             if os.path.isdir(path):
                 path = os.path.join(path, filename)
@@ -209,50 +198,13 @@ class DownloadFileInfoDialog(QDialog):
             "category": self.category_combo.currentText(),
             "filename": os.path.basename(self.save_input.text()),
             "size_str": self.file_info.get("size_str", "Unknown"),
-            "size_bytes": self.file_info.get("size_bytes", 0),
-            "dont_show_again": self.chk_dont_show.isChecked() if hasattr(self, "chk_dont_show") else False
+            "size_bytes": self.file_info.get("size_bytes", 0)
         }
         
-    def _save_dont_show_preference(self):
-        if not hasattr(self, "chk_dont_show") or not self.chk_dont_show.isChecked():
-            return
-        target = self.main_window
-        if not target:
-            for widget in QApplication.topLevelWidgets():
-                if hasattr(widget, "settings") and isinstance(widget.settings, dict):
-                    target = widget
-                    break
-        if target:
-            if hasattr(target, "settings") and isinstance(target.settings, dict):
-                target.settings["show_start_dialog"] = False
-            if hasattr(target, "show_start_dialog"):
-                target.show_start_dialog = False
-            if hasattr(target, "save_settings") and callable(target.save_settings):
-                target.save_settings()
-            if hasattr(target, "_options_dlg") and MemoryGuard.is_widget_alive(target._options_dlg):
-                if hasattr(target._options_dlg, "chk_show_start_dialog"):
-                    target._options_dlg.chk_show_start_dialog.setChecked(False)
-        else:
-            try:
-                import json
-                from core.utils import get_config_dir
-                path = os.path.join(get_config_dir(), "settings.json")
-                cur = {}
-                if os.path.exists(path):
-                    with open(path, "r") as f:
-                        cur = json.load(f)
-                cur["show_start_dialog"] = False
-                with open(path, "w") as f:
-                    json.dump(cur, f)
-            except Exception:
-                pass
-
     def on_start(self):
         self.action_result = 'start'
-        self._save_dont_show_preference()
         self.accept()
         
     def on_later(self):
         self.action_result = 'later'
-        self._save_dont_show_preference()
         self.accept()

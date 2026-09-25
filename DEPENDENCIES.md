@@ -30,23 +30,21 @@ sudo pacman -S python python-pip aria2 qt6-base
 
 ## 2. Python Dependencies
 
-These are declared in `pyproject.toml` and should be installed in a virtual environment.
+These are listed in `requirements.txt` and should be installed in a virtual environment.
 
 | Package | Purpose |
 |---------|---------|
 | `PyQt6` | The GUI framework used for the IDM-style interface. |
-| `python-socks[asyncio]` | Local SOCKS4/SOCKS5 proxy adapter bridge for Aria2. |
 | `pyinstaller` | Used to bundle the application into a standalone executable. |
 | `pytest` | Framework for running automated tests. |
 | `pytest-qt` | Plugin for testing Qt applications. |
 
-### Installation (using `uv`):
+### Installation:
 ```bash
-# Create virtual environment with uv
-uv venv
-
-# Install project dependencies with development/testing extras
-uv pip install -e ".[dev]"
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+pip install -r requirements-dev.txt  # For development/testing
 ```
 
 ---
@@ -63,7 +61,7 @@ uv pip install -e ".[dev]"
 The Chrome/Firefox extension requires:
 - A modern browser (Chrome, Edge, Firefox, Brave, etc.).
 - The extension files located in the `extension/` directory.
-- The application must be running to receive downloads via the local TCP port (56900).
+- The application must be running to receive downloads via the local TCP port (9000).
 
 ---
 

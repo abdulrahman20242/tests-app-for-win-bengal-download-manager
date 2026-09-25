@@ -62,10 +62,27 @@ class MemoryGuard:
                 trimmed = bool(res)
             elif platform.system() == "Windows":
                 try:
+                    from ctypes import wintypes
+                    # Same fix as get_process_memory() in core/utils.py: without
+                    # explicit argtypes/restype, ctypes truncates GetCurrentProcess's
+                    # 64-bit HANDLE return value to a 32-bit c_int on 64-bit Windows,
+                    # so SetProcessWorkingSetSize receives a bad handle and silently
+                    # fails -- previously undetected here because the return value
+                    # wasn't even checked, so `trimmed = True` was reported regardless.
                     kernel32 = ctypes.windll.kernel32
+                    kernel32.GetCurrentProcess.argtypes = []
+                    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+                    kernel32.SetProcessWorkingSetSize.argtypes = [
+                        wintypes.HANDLE, ctypes.c_size_t, ctypes.c_size_t
+                    ]
+                    kernel32.SetProcessWorkingSetSize.restype = wintypes.BOOL
                     current_process = kernel32.GetCurrentProcess()
-                    kernel32.SetProcessWorkingSetSize(current_process, -1, -1)
-                    trimmed = True
+                    # -1 (SIZE_T, not a signed int) tells Windows to trim the working
+                    # set to the minimum; ctypes.c_size_t.__ctypes_from_outparam__
+                    # isn't involved here, but passing -1 through an argtypes-declared
+                    # c_size_t parameter correctly reinterprets it as all-bits-set,
+                    # matching the documented "-1 means minimum" API contract.
+                    trimmed = bool(kernel32.SetProcessWorkingSetSize(current_process, -1, -1))
                 except Exception:
                     pass
         except Exception as e:

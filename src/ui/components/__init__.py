@@ -14,28 +14,10 @@ from ui.components.category_sidebar import (
 from ui.components.toolbar_manager import (
     ToolbarHoverFilter,
 )
-from ui.components.data_usage_widget import (
-    DataUsageWidget,
-)
-
-from ui.components.csd_titlebar import (
-    CsdTitleBar,
-    attach_csd,
-    detach_csd,
-    ADW_COLORS,
-    read_xdg_color_scheme,
-)
 
 __all__ = [
     "SortableTableWidgetItem",
     "EmptyAreaClickFilter",
     "SidebarItemDelegate",
     "ToolbarHoverFilter",
-    "DataUsageWidget",
-    "CsdTitleBar",
-    "attach_csd",
-    "detach_csd",
-    "ADW_COLORS",
-    "read_xdg_color_scheme",
 ]
-

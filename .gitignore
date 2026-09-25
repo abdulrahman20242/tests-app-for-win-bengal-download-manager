@@ -12,12 +12,7 @@ __pycache__/
 
 # Distribution / Packaging
 dist/
-.pyinstaller-build/
-build_output/
-build/*/output/
-build/*-release/
-build/*-debug/
-!build/
+build/
 *.egg-info/
 
 # Jupyter Notebook checkpoints
@@ -30,8 +25,7 @@ Thumbs.db
 # custom
 docs/*
 !docs/*.md
-!docs/adr/
-!docs/adr/*.md
+!docs/superpowers/
 .superpowers/
 .worktrees/
 .agents/

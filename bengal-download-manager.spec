@@ -1,14 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
+import platform
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('build/runtime_assets', 'assets')]
+_is_windows = platform.system() == "Windows"
+
+datas = [('assets', 'assets')]
 binaries = []
 hiddenimports = []
 tmp_ret = collect_all('core')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('ui')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('python_socks')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
@@ -30,26 +31,26 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.datas,
     [],
-    exclude_binaries=True,
     name='bengal-download-manager',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    console=True,
+    # UPX-compressed PyInstaller executables are a well-known source of Windows
+    # Defender/SmartScreen and third-party AV false positives; skip UPX on Windows
+    # only. Linux/macOS behavior is unchanged.
+    upx=not _is_windows,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    # A windowed GUI app should not carry a visible console on Windows. Left as
+    # console=True on Linux/macOS, matching the previous (and still current) debug
+    # behavior there -- this only changes what happens when built ON Windows.
+    console=not _is_windows,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-)
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='bengal-download-manager',
 )

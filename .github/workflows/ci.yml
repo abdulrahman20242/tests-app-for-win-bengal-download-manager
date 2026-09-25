@@ -35,7 +35,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.10'
           cache: 'pip'
 
       - name: Install System Dependencies
@@ -46,7 +46,7 @@ jobs:
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e .[dev]
+          pip install -r requirements-dev.txt
 
       - name: Validate Version Consistency Across Manifests
         run: |
@@ -57,13 +57,15 @@ jobs:
         run: |
           VERSION=$(cat VERSION)
           if [[ "$VERSION" =~ -(alpha|beta|rc|dev) ]]; then
-            echo "::warning title=Pre-release Version on PR::This PR contains pre-release version '$VERSION'. Remember to run 'python3 scripts/sync_version.py --graduate' before tagging a stable release."
+            echo "::error::Pull requests targeting 'main' cannot contain a pre-release version: '$VERSION'."
+            echo "Run 'python3 scripts/sync_version.py --graduate' (or '--set ${VERSION%%-*}') before merging."
+            exit 1
           fi
 
       - name: Validate Desktop Entry and Metainfo
         run: |
-          desktop-file-validate flatpak/bd.com.zihad.BengalDownloadManager.desktop
-          appstreamcli validate flatpak/bd.com.zihad.BengalDownloadManager.metainfo.xml
+          desktop-file-validate flatpak/io.github.tazihad.bengal-download-manager.desktop
+          appstreamcli validate flatpak/io.github.tazihad.bengal-download-manager.metainfo.xml
 
       - name: Run Test Suite
         env:

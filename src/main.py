@@ -11,8 +11,6 @@ import os
 import json
 import threading
 import traceback
-import signal
-import atexit
 from typing import Optional
 
 # Setup import search paths
@@ -24,16 +22,10 @@ if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
     if sys._MEIPASS not in sys.path:
         sys.path.insert(0, sys._MEIPASS)
 
-# Prevent host GIO modules from loading against bundled GLib in frozen/AppImage environments
-# (prevents libgvfs / symbol mismatch undefined symbol: g_variant_builder_init_static and subsequent segfaults)
-if getattr(sys, 'frozen', False) or os.environ.get("APPIMAGE") or os.environ.get("APPDIR"):
-    os.environ["GIO_MODULE_DIR"] = "/dev/null"
-    os.environ.pop("GIO_EXTRA_MODULES", None)
-
 from PyQt6.QtWidgets import QApplication, QStyle
 from PyQt6.QtCore import Qt, QTimer, qInstallMessageHandler, QtMsgType
 
-from core.utils import setup_logging, get_config_dir, is_debug_mode
+from core.utils import setup_logging, get_config_dir
 from core.services.ipc_service import (
     DM_CONNECTOR_PORT,
     SignalEmitter,
@@ -52,7 +44,6 @@ from core.services.theme_service import (
     CATEGORY_EXTENSIONS,
     FREEDESKTOP_MAP,
     apply_app_theme,
-    apply_titlebar_theme,
     detect_accent,
     ensure_adaptive_icon_theme,
     format_timestamp_relative,
@@ -68,7 +59,6 @@ from core.services.theme_service import (
     normalize_accent_name,
     normalize_icon_theme_name,
     normalize_theme_name,
-    normalize_titlebar_name,
     normalize_tray_icon_name,
     parse_size_to_bytes,
     parse_time_to_sec,
@@ -112,7 +102,7 @@ def main():
     except Exception:
         pass
 
-    is_debug = is_debug_mode()
+    is_debug = "--debug" in sys.argv or os.environ.get("DEBUG") == "1"
     logger = setup_logging(debug=is_debug)
     if is_debug:
         logger.debug("Command-line arguments: %s", sys.argv)
@@ -140,33 +130,20 @@ def main():
         # Ignore benign development-mode portal registration warning when running unpackaged
         if "Failed to register with host portal" in message and "App info not found" in message:
             return
-        # Ignore benign HarfBuzz font shaping OpenType missing script coverage notices
-        if "OpenType support missing for" in message:
-            return
-
-        ctx_str = f" [{context.file}:{context.line}]" if context and context.file else ""
-        if mode in (QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
-            logger.critical("[QT %s]%s %s", level, ctx_str, message)
-        elif mode == QtMsgType.QtWarningMsg:
+        if is_debug or mode in (QtMsgType.QtWarningMsg, QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
+            ctx_str = f" [{context.file}:{context.line}]" if context and context.file else ""
             logger.warning("[QT %s]%s %s", level, ctx_str, message)
-        elif is_debug:
-            if mode == QtMsgType.QtInfoMsg:
-                logger.info("[QT %s]%s %s", level, ctx_str, message)
-            else:
-                logger.debug("[QT %s]%s %s", level, ctx_str, message)
 
     sys.excepthook = exception_hook
     if hasattr(threading, "excepthook"):
         threading.excepthook = thread_exception_hook
     qInstallMessageHandler(qt_message_handler)
 
-    from core.desktop import get_desktop_file_name
-
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
     app.setOrganizationName("bengal-download-manager")
     app.setApplicationName("bengal-download-manager")
-    app.setDesktopFileName(get_desktop_file_name())
+    app.setDesktopFileName("io.github.tazihad.bengal-download-manager")
     app.setQuitOnLastWindowClosed(False)
 
     # --- SINGLE INSTANCE ENFORCEMENT ---
@@ -175,12 +152,10 @@ def main():
             print("Bengal Download Manager is already running. Primary instance brought to focus.")
             sys.exit(0)
 
-    saved_theme = "BDM Auto (Default)"
+    saved_theme = "BDM Dark (Default)"
     saved_accent = "BDM (Default)"
     saved_icon_theme = "BDM Auto (Default)"
     saved_tray_icon = "App Icon (Default)"
-    saved_title_bar = "Automatic"
-    saved_language = "system"
     try:
         if os.path.exists(cfg_path):
             with open(cfg_path, "r") as f:
@@ -189,14 +164,10 @@ def main():
                 saved_accent = normalize_accent_name(s_data.get("accent"))
                 saved_icon_theme = normalize_icon_theme_name(s_data.get("icon_theme"))
                 saved_tray_icon = normalize_tray_icon_name(s_data.get("tray_icon"))
-                saved_title_bar = normalize_titlebar_name(s_data.get("title_bar"))
-                saved_language = s_data.get("language", "system")
     except Exception:
         pass
 
-    apply_app_theme(saved_theme, saved_accent, saved_icon_theme, saved_tray_icon, app=app, title_bar_mode=saved_title_bar)
-    from core.services.language_service import apply_language
-    apply_language(app, saved_language)
+    apply_app_theme(saved_theme, saved_accent, saved_icon_theme, saved_tray_icon, app)
     app.setFont(init_app_font())
     
     # Initialize and set global application icon
@@ -204,15 +175,35 @@ def main():
     if app_icon.isNull():
         app_icon = app.style().standardIcon(QStyle.StandardPixmap.SP_DriveNetIcon)
     app.setWindowIcon(app_icon)
-
-    # Warm up build info and release verification asynchronously
-    try:
-        from core.build_info import warmup_build_info_async
-        warmup_build_info_async()
-    except Exception:
-        pass
-
+    
     window = MainWindow()
+
+    # --- MAKE CTRL+C ACTUALLY EXIT THE APP ---
+    # Qt's C++ event loop (app.exec()) blocks the Python interpreter from getting a
+    # chance to notice a pending OS signal. Python's default SIGINT handler just
+    # raises KeyboardInterrupt at the next available bytecode checkpoint -- inside a
+    # Qt app that means whatever Qt-driven callback happens to fire next (e.g. a
+    # QTimer tick). PyQt6 catches unhandled exceptions raised inside slots and keeps
+    # the event loop running, so that KeyboardInterrupt gets logged and swallowed
+    # instead of the app actually exiting -- and since setQuitOnLastWindowClosed(False)
+    # is set above, there's no "closing the last window" fallback either.
+    #
+    # Fix: install our own SIGINT handler that schedules the same quit_app() the
+    # tray/menu "Exit" action already uses (so aria2 termination, state saving, etc.
+    # still run), via QTimer.singleShot so it executes as a normal, safely-scheduled
+    # Qt callback rather than synchronously inside the raw signal handler. The short
+    # periodic no-op timer guarantees Python gets a prompt chance to notice the
+    # signal at all, rather than depending on whatever other timer happens to fire.
+    import signal
+
+    def _handle_sigint(signum, frame):
+        QTimer.singleShot(0, window.quit_app)
+
+    signal.signal(signal.SIGINT, _handle_sigint)
+    _sigint_pump = QTimer()
+    _sigint_pump.timeout.connect(lambda: None)
+    _sigint_pump.start(200)
+
     use_qml = "--qml" in sys.argv or "--kirigami" in sys.argv or os.environ.get("USE_KIRIGAMI") == "1"
 
     # Start single instance server on primary instance if enabled
@@ -241,52 +232,6 @@ def main():
         single_instance_server.start()
         window.single_instance_server = single_instance_server
 
-    # --- GRACEFUL EXIT & SHUTDOWN HANDLING ---
-    def perform_cleanup():
-        """Ensure all background threads, servers, and aria2 daemon are cleanly terminated."""
-        try:
-            if hasattr(window, "listener_thread") and window.listener_thread:
-                window.listener_thread.stop(timeout_ms=1500)
-                window.listener_thread = None
-        except Exception:
-            pass
-
-        try:
-            if hasattr(window, "single_instance_server") and window.single_instance_server:
-                window.single_instance_server.stop()
-                window.single_instance_server = None
-        except Exception:
-            pass
-
-        try:
-            if hasattr(window, "stop_aria2_daemon"):
-                window.stop_aria2_daemon()
-        except Exception:
-            pass
-
-    app.aboutToQuit.connect(perform_cleanup)
-    atexit.register(perform_cleanup)
-
-    # Allow clean Ctrl+C / SIGTERM termination within Qt's event loop
-    def sig_handler(signum, frame):
-        logger.info("Signal %s received. Shutting down gracefully...", signum)
-        if hasattr(window, "quit_app"):
-            window.quit_app()
-        else:
-            perform_cleanup()
-            app.quit()
-
-    try:
-        signal.signal(signal.SIGINT, sig_handler)
-        signal.signal(signal.SIGTERM, sig_handler)
-    except Exception:
-        pass
-
-    # Heartbeat timer to periodically yield control to Python interpreter for signal handling
-    heartbeat_timer = QTimer()
-    heartbeat_timer.timeout.connect(lambda: None)
-    heartbeat_timer.start(500)
-
     if "--minimized" in sys.argv:
         window.start_minimized = True
         QTimer.singleShot(0, window.hide)
@@ -302,7 +247,7 @@ def main():
 
             qml_engine = QQmlApplicationEngine()
             qml_engine.addImportPath("/usr/lib/x86_64-linux-gnu/qt6/qml")
-            bridge = DownloadBridge(main_window=window, store=getattr(window, "download_store", None))
+            bridge = DownloadBridge(main_window=window)
             window.bridge = bridge
             qml_engine.rootContext().setContextProperty("downloadBridge", bridge)
 

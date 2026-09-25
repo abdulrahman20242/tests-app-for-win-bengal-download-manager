@@ -76,20 +76,18 @@ body {
   font-family: var(--font-family);
   background-color: var(--bg-window);
   color: var(--text-main);
-  height: 100vh;
+  min-height: 100vh;
   display: flex;
   justify-content: center;
-  align-items: center;
+  align-items: flex-start;
   padding: 24px 16px;
   -webkit-font-smoothing: antialiased;
-  overflow: hidden;
 }
 
 .app-layout {
   display: flex;
   width: 100%;
-  max-width: 920px;
-  height: min(840px, calc(100vh - 48px));
+  max-width: 900px;
   min-height: 580px;
   background-color: var(--bg-card);
   border: 1px solid var(--border-color);
@@ -101,7 +99,6 @@ body {
 /* Sidebar Styles */
 .sidebar {
   width: 240px;
-  height: 100%;
   background-color: var(--bg-sidebar);
   border-right: 1px solid var(--border-color);
   display: flex;
@@ -187,37 +184,22 @@ body {
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   margin-bottom: 12px;
-  flex-shrink: 0;
-  gap: 8px;
-}
-
-.status-indicators-group {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  flex: 1;
-  min-width: 0;
 }
 
 .status-indicator {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--text);
 }
 
 .dot {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background-color: var(--text-muted);
   transition: background-color var(--transition);
-  flex-shrink: 0;
 }
 
 .dot.online {
@@ -264,13 +246,11 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  flex-shrink: 0;
 }
 
 /* Content Panel Styles */
 .content-panel {
   flex-grow: 1;
-  height: 100%;
   padding: 28px 32px;
   overflow-y: auto;
   position: relative;
@@ -716,50 +696,4 @@ body {
 .status-toast.error {
   background-color: var(--bdm-error);
   color: #ffffff;
-}
-
-.port-status-badge {
-  display: none;
-  align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  font-size: 11.5px;
-  font-weight: 500;
-  line-height: 1.4;
-}
-
-.port-status-badge.visible {
-  display: flex;
-}
-
-.port-status-badge.connected {
-  background-color: rgba(46, 204, 113, 0.12);
-  color: #27ae60;
-  border: 1px solid rgba(46, 204, 113, 0.28);
-}
-
-.port-status-badge.fallback {
-  background-color: rgba(243, 156, 18, 0.12);
-  color: #d35400;
-  border: 1px solid rgba(243, 156, 18, 0.28);
-}
-
-.port-status-badge.disconnected {
-  background-color: rgba(231, 76, 60, 0.1);
-  color: #c0392b;
-  border: 1px solid rgba(231, 76, 60, 0.22);
-}
-
-@media (max-height: 640px) {
-  body {
-    height: auto;
-    min-height: 100vh;
-    align-items: flex-start;
-    overflow-y: auto;
-  }
-  .app-layout {
-    height: 580px;
-  }
 }

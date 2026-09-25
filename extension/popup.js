@@ -87,52 +87,20 @@ function extractHostname(url) {
   }
 }
 
-function normalizeDomain(host) {
-  if (!host || typeof host !== 'string') return "";
-  let clean = host.toLowerCase().trim();
-  clean = clean.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-  if (clean.startsWith('*.')) clean = clean.substring(2);
-  else if (clean.startsWith('*')) clean = clean.substring(1);
-  if (clean.startsWith('www.')) clean = clean.substring(4);
-  if (clean.includes(':')) clean = clean.split(':')[0];
-  return clean;
-}
-
-function isDomainInList(domain, list) {
-  if (!domain || !Array.isArray(list) || list.length === 0) return false;
-  const target = normalizeDomain(domain);
-  if (!target) return false;
-  return list.some(item => {
-    const p = normalizeDomain(item);
-    if (!p) return false;
-    return p === target || target.endsWith('.' + p) || p.endsWith('.' + target);
-  });
-}
-
 let currentDomain = "";
-let isGlobalInterceptionEnabled = true;
 
 function updateGlobalToggleUI(enabled) {
-  isGlobalInterceptionEnabled = (enabled !== false);
   const toggle = document.getElementById('toggle-global-interception');
   const subtitle = document.getElementById('global-subtitle');
-  if (toggle) toggle.checked = isGlobalInterceptionEnabled;
+  if (toggle) toggle.checked = enabled;
   if (subtitle) {
-    subtitle.textContent = isGlobalInterceptionEnabled 
-      ? "Active browser-wide" 
-      : "Paused browser-wide";
-  }
-
-  if (currentDomain) {
-    chrome.storage.local.get({ blacklistUrls: [] }, (items) => {
-      const bList = Array.isArray(items.blacklistUrls) ? items.blacklistUrls : [];
-      const isBlacklisted = isDomainInList(currentDomain, bList);
-      updateSiteToggleUI(currentDomain, !isBlacklisted, true);
-    });
+    subtitle.textContent = enabled 
+      ? "Capture downloads browser-wide" 
+      : "Paused for all websites";
   }
 }
 
-function updateSiteToggleUI(domain, isCaptured, hasValidSite) {
+function updateSiteToggleUI(domain, isBlacklisted, hasValidSite) {
   const toggle = document.getElementById('toggle-site-interception');
   const domainElem = document.getElementById('site-domain');
   const descElem = document.getElementById('site-desc');
@@ -149,31 +117,18 @@ function updateSiteToggleUI(domain, isCaptured, hasValidSite) {
     return;
   }
 
-  if (domainElem) {
-    domainElem.textContent = domain;
-  }
-
-  if (!isGlobalInterceptionEnabled) {
-    if (row) row.classList.add('disabled');
-    if (toggle) {
-      toggle.disabled = true;
-      toggle.checked = false;
-    }
-    if (descElem) {
-      descElem.textContent = "Paused (global capture is off)";
-    }
-    return;
-  }
-
   if (row) row.classList.remove('disabled');
   if (toggle) {
     toggle.disabled = false;
-    toggle.checked = !!isCaptured; // Checked = Capture active on this site
+    toggle.checked = isBlacklisted; // Checked = Don't catch (bypassed)
+  }
+  if (domainElem) {
+    domainElem.textContent = domain;
   }
   if (descElem) {
-    descElem.textContent = isCaptured 
-      ? "Enabled (captured by Bengal DM)" 
-      : "Disabled (handled by browser)";
+    descElem.textContent = isBlacklisted 
+      ? "Handled by browser" 
+      : "Captured by Bengal DM";
   }
 }
 
@@ -188,8 +143,11 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     }
     if (changes.blacklistUrls && currentDomain) {
       const bList = Array.isArray(changes.blacklistUrls.newValue) ? changes.blacklistUrls.newValue : [];
-      const isBlacklisted = isDomainInList(currentDomain, bList);
-      updateSiteToggleUI(currentDomain, !isBlacklisted, true);
+      const isBlacklisted = bList.some(p => {
+        const clean = p.toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').trim();
+        return clean === currentDomain || currentDomain.endsWith('.' + clean);
+      });
+      updateSiteToggleUI(currentDomain, isBlacklisted, true);
     }
   }
 });
@@ -202,56 +160,39 @@ document.getElementById('toggle-global-interception').addEventListener('change',
   });
 });
 
-document.getElementById('global-toggle-row').addEventListener('click', (e) => {
-  if (e.target.closest('.switch')) return;
-  const toggle = document.getElementById('toggle-global-interception');
-  if (toggle && !toggle.disabled) {
-    toggle.checked = !toggle.checked;
-    toggle.dispatchEvent(new Event('change'));
-  }
-});
-
 document.getElementById('toggle-site-interception').addEventListener('change', (e) => {
-  const enableForThisSite = e.target.checked;
+  const bypassThisSite = e.target.checked;
   if (!currentDomain) return;
 
   chrome.storage.local.get({ blacklistUrls: [] }, (items) => {
     let list = Array.isArray(items.blacklistUrls) ? [...items.blacklistUrls] : [];
-    const target = normalizeDomain(currentDomain);
 
-    if (enableForThisSite) {
-      // Remove domain and its subdomains/apex from blacklist so it IS captured
-      list = list.filter(item => {
-        const p = normalizeDomain(item);
-        if (!p) return false;
-        return !(p === target || target.endsWith('.' + p) || p.endsWith('.' + target));
+    if (bypassThisSite) {
+      // Add domain to blacklist if not already present
+      const alreadyIn = list.some(p => {
+        const clean = p.toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').trim();
+        return clean === currentDomain;
       });
-    } else {
-      // Add normalized domain to blacklist so it is bypassed
-      if (!isDomainInList(currentDomain, list)) {
-        list.push(target || currentDomain);
+      if (!alreadyIn) {
+        list.push(currentDomain);
       }
+    } else {
+      // Remove domain and its variations from blacklist
+      list = list.filter(p => {
+        const clean = p.toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').trim();
+        return clean !== currentDomain && !currentDomain.endsWith('.' + clean);
+      });
     }
 
     chrome.storage.local.set({ blacklistUrls: list }, () => {
-      updateSiteToggleUI(currentDomain, enableForThisSite, true);
+      updateSiteToggleUI(currentDomain, bypassThisSite, true);
     });
   });
-});
-
-document.getElementById('site-toggle-row').addEventListener('click', (e) => {
-  if (e.target.closest('.switch')) return;
-  const toggle = document.getElementById('toggle-site-interception');
-  if (toggle && !toggle.disabled) {
-    toggle.checked = !toggle.checked;
-    toggle.dispatchEvent(new Event('change'));
-  }
 });
 
 chrome.storage.local.get({
   theme: "system",
   port: 56800,
-  ipcPort: 56900,
   token: "",
   bdmVersion: "",
   enableInterception: true,
@@ -268,8 +209,11 @@ chrome.storage.local.get({
       if (domain) {
         currentDomain = domain;
         const bList = Array.isArray(items.blacklistUrls) ? items.blacklistUrls : [];
-        const isBlacklisted = isDomainInList(domain, bList);
-        updateSiteToggleUI(domain, !isBlacklisted, true);
+        const isBlacklisted = bList.some(p => {
+          const clean = p.toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').trim();
+          return clean === domain || domain.endsWith('.' + clean);
+        });
+        updateSiteToggleUI(domain, isBlacklisted, true);
       } else {
         updateSiteToggleUI("", false, false);
       }
@@ -282,32 +226,31 @@ chrome.storage.local.get({
 
   const statusText = document.getElementById('status-text');
   const dot = document.getElementById('dot');
-  const primaryIpcPort = items.activeIpcPort || parseInt(items.ipcPort, 10) || 56900;
-  const ipcPortsToTry = [primaryIpcPort];
-  for (const fp of [26900, 26901, 26902]) {
-    if (!ipcPortsToTry.includes(fp)) ipcPortsToTry.push(fp);
-  }
-  if (!ipcPortsToTry.includes(56900)) ipcPortsToTry.push(56900);
 
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 1500);
 
-    // 1. Ping the Python app on configured or fallback IPC ports
+    // 1. Ping the Python app on port 9000
     let bdmData = null;
-    for (const tryPort of ipcPortsToTry) {
+    try {
+      const response = await fetch("http://127.0.0.1:9000/", {
+        method: 'GET',
+        signal: controller.signal
+      });
+      if (response.ok) {
+        bdmData = await response.json();
+      }
+    } catch {
       try {
-        const response = await fetch(`http://127.0.0.1:${tryPort}/`, {
+        const response = await fetch("http://localhost:9000/", {
           method: 'GET',
           signal: controller.signal
         });
         if (response.ok) {
           bdmData = await response.json();
-          break;
         }
-      } catch {
-        // Continue to next port
-      }
+      } catch {}
     }
 
     clearTimeout(timeoutId);
@@ -318,19 +261,11 @@ chrome.storage.local.get({
       if (ariaOnline) {
         dot.className = "dot online";
         let ver = bdmData.version || items.bdmVersion;
-        const storageUpdates = {};
-        if (bdmData.version) storageUpdates.bdmVersion = bdmData.version;
-        if (bdmData.ipc_port) {
-          storageUpdates.ipcPort = bdmData.ipc_port;
-          storageUpdates.activeIpcPort = bdmData.ipc_port;
-          storageUpdates.isIpcFallback = Boolean(bdmData.is_fallback);
-        }
-        if (Object.keys(storageUpdates).length > 0) {
-          chrome.storage.local.set(storageUpdates);
+        if (bdmData.version) {
+          chrome.storage.local.set({ bdmVersion: bdmData.version });
         }
         const formatted = formatAppVersion(ver);
-        const fallbackNotice = bdmData.is_fallback ? ` [Port ${bdmData.ipc_port}]` : "";
-        statusText.textContent = formatted ? `Bengal DM Running (${formatted})${fallbackNotice}` : `Bengal DM Running${fallbackNotice}`;
+        statusText.textContent = formatted ? `Bengal DM Running (${formatted})` : "Bengal DM Running";
         chrome.runtime.sendMessage({ action: "update_connection_status", online: true }).catch(() => {});
       } else {
         dot.className = "dot offline";

@@ -48,9 +48,9 @@
   * `AddUrlDialog.qml` & `OptionsDialog.qml`: Kirigami Dialog overlays.
 * **`src/ui/dialogs/`**: PyQt6 QWidget dialog windows (`progress.py`, `complete.py`, `file_info.py`, `options.py`, `properties.py`).
 * **`flatpak/`**:
-  * `bd.com.zihad.BengalDownloadManager.yml`: Flatpak manifest for `org.kde.Platform` 6.11.
-  * `bd.com.zihad.BengalDownloadManager.desktop`: XDG desktop launcher entry.
-  * `bd.com.zihad.BengalDownloadManager.metainfo.xml`: AppStream component metadata.
+  * `io.github.tazihad.bengal-download-manager.yml`: Flatpak manifest for `org.kde.Platform` 6.11.
+  * `io.github.tazihad.bengal-download-manager.desktop`: XDG desktop launcher entry.
+  * `io.github.tazihad.bengal-download-manager.metainfo.xml`: AppStream component metadata.
 * **`extension/`**: Manifest V3 browser extension for Chrome and Firefox.
 * **`tests/`**: Automated test suite (`test_utils.py`, `test_workers.py`, `test_bridge.py`, `test_ui.py`).
 
@@ -61,20 +61,20 @@
 ### Run Application in Development Mode
 ```bash
 # Standard PyQt6 QWidget Mode
-uv run python src/main.py
+venv/bin/python src/main.py
 
 # KDE Kirigami QML Mode
-uv run python src/main.py --kirigami
+venv/bin/python src/main.py --kirigami
 ```
 
 ### Run Automated Unit Test Suite
 ```bash
-PYTHONPATH=src uv run pytest -v tests/
+PYTHONPATH=src venv/bin/pytest -v tests/
 ```
 
 ### Build Standalone Executable Binary
 ```bash
-PYTHONPATH=src uv run pyinstaller \
+PYTHONPATH=src venv/bin/pyinstaller \
     --name "bengal-download-manager" \
     --onefile \
     --paths "src" \
@@ -86,9 +86,9 @@ PYTHONPATH=src uv run pyinstaller \
     --noconfirm src/main.py
 ```
 
-### Build Flatpak Package
+### Build and Run Flatpak Package
 ```bash
-bash scripts/build_flatpak.sh
+bash scripts/build_and_run_flatpak.sh
 ```
 
 ---
@@ -101,4 +101,3 @@ bash scripts/build_flatpak.sh
 4. **Theme Adaptability**: Do not hardcode static dark text colors (`#444`). Allow `QPalette` system colors to adapt cleanly across Light, Dark, and Automatic system themes.
 5. **Empirical Verification**: Always verify code changes by running `pytest` or testing binary builds before declaring completion.
 6. **Single Source of Truth Versioning**: Always use `scripts/sync_version.py` when changing or checking version numbers across `VERSION`, `snap/snapcraft.yaml`, `flatpak/metainfo.xml`, and `src/core/version.py`. (Note: Browser extension in `extension/manifest.json` is versioned independently). See `docs/VERSIONING.md` for details.
-7. **Use `uv` Instead of `venv`**: Always use `uv` for Python environment management, package installation, and execution (e.g. `uv venv`, `uv pip install ...`, and `uv run <command>`). Do not use standard `python3 -m venv` or raw `venv/bin/python`.

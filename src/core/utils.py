@@ -12,20 +12,11 @@ import logging
 import mimetypes
 from urllib.parse import urlparse, unquote, parse_qs
 
-def is_debug_mode() -> bool:
-    """Returns True if debug mode is active via CLI flag or environment variables."""
-    return "--debug" in sys.argv or os.environ.get("DEBUG") == "1" or os.environ.get("BENGAL_DEBUG") == "1"
-
-
 def setup_logging(debug=False):
     """
     Configures application-wide logging levels and formatting.
     When debug=True (--debug flag), enables verbose DEBUG logs with file/line context.
     """
-    if debug:
-        os.environ["BENGAL_DEBUG"] = "1"
-        os.environ["DEBUG"] = "1"
-
     log_level = logging.DEBUG if debug else logging.INFO
     log_format = "[%(asctime)s] [%(levelname)s] [%(name)s:%(lineno)d] %(message)s" if debug else "[%(asctime)s] [%(levelname)s] %(message)s"
     
@@ -96,10 +87,31 @@ def get_process_memory() -> int:
                     ('PagefileUsage', ctypes.c_size_t),
                     ('PeakPagefileUsage', ctypes.c_size_t)
                 ]
+            # CRITICAL on 64-bit Windows: ctypes defaults an unannotated foreign
+            # function's return type (and any plain-int argument) to c_int (32-bit).
+            # GetCurrentProcess() returns a pointer-sized HANDLE (the pseudo-handle
+            # -1, i.e. all 64 bits set) -- without an explicit .restype, that gets
+            # truncated to a 32-bit -1 and then, without .argtypes on the next call,
+            # zero-extended back out instead of sign-extended when passed into
+            # GetProcessMemoryInfo, which no longer recognizes it as a valid handle.
+            # GetProcessMemoryInfo then fails, this whole block silently falls
+            # through, `import resource` raises on Windows (POSIX-only module), and
+            # the function returns 0 -- exactly the reported symptom. Declaring
+            # argtypes/restype explicitly (the documented fix for this well-known
+            # ctypes pitfall) makes ctypes marshal the full pointer width correctly.
+            kernel32 = ctypes.windll.kernel32
+            psapi = ctypes.windll.psapi
+            kernel32.GetCurrentProcess.argtypes = []
+            kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+            psapi.GetProcessMemoryInfo.argtypes = [
+                wintypes.HANDLE, ctypes.POINTER(PROCESS_MEMORY_COUNTERS), wintypes.DWORD
+            ]
+            psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+
             counters = PROCESS_MEMORY_COUNTERS()
             counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
-            handle = ctypes.windll.kernel32.GetCurrentProcess()
-            if ctypes.windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+            handle = kernel32.GetCurrentProcess()
+            if psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
                 return int(counters.WorkingSetSize)
         except Exception:
             pass
@@ -268,6 +280,16 @@ def resolve_filename(url, headers):
         base, ext = os.path.splitext(filename)
         base_bytes = base.encode('utf-8')[:150].decode('utf-8', errors='ignore').strip()
         filename = f"{base_bytes}{ext}"
+
+    if filename:
+        # Strip characters that are illegal in Windows filenames (\ / * ? : " < > |).
+        # Applied on every platform (not just Windows) so a given download produces the
+        # same filename regardless of OS -- mirrors the character set already used by
+        # sanitize_media_filename() for the separate media/yt-dlp downloader, which this
+        # function did not previously share.
+        filename = re.sub(r'[\\/*?:"<>|]', "_", filename).strip(" .")
+        if not filename:
+            filename = "downloaded_file"
 
     return filename
 
@@ -485,22 +507,46 @@ def get_user_downloads_dir() -> str:
 
 def get_data_dir():
     home = os.path.expanduser("~")
-    base = os.environ.get('XDG_DATA_HOME') or os.path.join(home, '.local', 'share')
+    if platform.system() == "Windows":
+        # %LOCALAPPDATA% is the idiomatic Windows home for app data that shouldn't
+        # roam between machines -- the closest match to XDG_DATA_HOME's semantics.
+        # The os.environ.get('LOCALAPPDATA', ...) fallback only matters in the rare
+        # case that env var is missing; Windows sets it for every user session.
+        base = os.environ.get('XDG_DATA_HOME') or os.environ.get('LOCALAPPDATA') \
+            or os.path.join(home, "AppData", "Local")
+    else:
+        base = os.environ.get('XDG_DATA_HOME') or os.path.join(home, '.local', 'share')
     path = os.path.join(base, 'bengal-download-manager')
     os.makedirs(path, exist_ok=True)
     return path
 
 def get_config_dir():
     home = os.path.expanduser("~")
-    base = os.environ.get('XDG_CONFIG_HOME') or os.path.join(home, '.config')
+    if platform.system() == "Windows":
+        # %APPDATA% (Roaming) is the idiomatic home for user config on Windows.
+        base = os.environ.get('XDG_CONFIG_HOME') or os.environ.get('APPDATA') \
+            or os.path.join(home, "AppData", "Roaming")
+    else:
+        base = os.environ.get('XDG_CONFIG_HOME') or os.path.join(home, '.config')
     path = os.path.join(base, 'bengal-download-manager')
     os.makedirs(path, exist_ok=True)
     return path
 
 def get_cache_dir():
     home = os.path.expanduser("~")
-    base = os.environ.get('XDG_CACHE_HOME') or os.path.join(home, '.cache')
-    path = os.path.join(base, 'bengal-download-manager')
+    xdg_override = os.environ.get('XDG_CACHE_HOME')
+    if xdg_override:
+        # An explicit XDG_CACHE_HOME (set by a user, or by tests/conftest.py for
+        # isolation) is always honored exactly as before, on every platform.
+        path = os.path.join(xdg_override, 'bengal-download-manager')
+    elif platform.system() == "Windows":
+        # No explicit override: fall back to the Windows-native default. Nested under
+        # a "Cache" subfolder of the same root get_data_dir() uses, so cache and data
+        # don't collide in the same %LOCALAPPDATA%\bengal-download-manager folder.
+        base = os.environ.get('LOCALAPPDATA') or os.path.join(home, "AppData", "Local")
+        path = os.path.join(base, 'bengal-download-manager', 'Cache')
+    else:
+        path = os.path.join(home, '.cache', 'bengal-download-manager')
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -536,8 +582,7 @@ def load_extension_config():
         "host": "localhost",
         "port": 56800,
         "token": "",
-        "max_connections": 8,
-        "ipc_port": 56900
+        "max_connections": 8
     }
     if os.path.exists(path):
         try:
@@ -551,11 +596,6 @@ def load_extension_config():
                         merged["max_connections"] = max(1, min(32, conn))
                     except (ValueError, TypeError):
                         merged["max_connections"] = 8
-                    try:
-                        ipc_p = int(merged.get("ipc_port", 56900))
-                        merged["ipc_port"] = max(1024, min(65535, ipc_p))
-                    except (ValueError, TypeError):
-                        merged["ipc_port"] = 56900
                     return merged
         except: pass
     return default
@@ -567,94 +607,36 @@ def save_extension_config(data):
             json.dump(data, f, indent=4)
     except: pass
 
-def is_socks_proxy_config(proxy_config=None) -> bool:
-    """
-    Returns True if proxy configuration is manually set to a SOCKS proxy type.
-    """
-    if proxy_config is None:
-        proxy_config = load_proxy_config()
-    if not isinstance(proxy_config, dict) or proxy_config.get("mode") != "manual":
-        return False
-    host = str(proxy_config.get("host") or "").strip()
-    if not host:
-        return False
-    ptype = str(proxy_config.get("type") or "http").lower()
-    return ptype in ("socks4", "socks4a", "socks5", "socks5h")
-
-
-def get_upstream_proxy_url(proxy_config=None) -> str:
-    """
-    Returns full upstream proxy URI formatted for the configured protocol
-    (http, https, socks4, socks5), or empty string if no manual proxy configured.
-    """
-    if proxy_config is None:
-        proxy_config = load_proxy_config()
-
-    if not isinstance(proxy_config, dict) or proxy_config.get("mode") != "manual":
-        return ""
-
-    host = str(proxy_config.get("host") or "").strip()
-    if not host:
-        return ""
-
-    ptype = str(proxy_config.get("type") or "http").lower()
-    if ptype not in ("http", "https", "socks4", "socks4a", "socks5", "socks5h"):
-        ptype = "http"
-
-    try:
-        default_port = 1080 if "socks" in ptype else 8080
-        port = int(proxy_config.get("port") or default_port)
-    except (ValueError, TypeError):
-        port = 1080 if "socks" in ptype else 8080
-
-    user = str(proxy_config.get("user") or "")
-    password = str(proxy_config.get("password") or "")
-
-    from urllib.parse import quote
-
-    if proxy_config.get("auth") and user:
-        encoded_user = quote(user, safe="")
-        if ptype.startswith("socks4"):
-            # SOCKS4 only supports user identification without password
-            return f"{ptype}://{encoded_user}@{host}:{port}"
-        elif password:
-            encoded_pass = quote(password, safe="")
-            return f"{ptype}://{encoded_user}:{encoded_pass}@{host}:{port}"
-        else:
-            return f"{ptype}://{encoded_user}@{host}:{port}"
-    else:
-        return f"{ptype}://{host}:{port}"
-
-
 def get_aria2_proxy_url(proxy_config=None) -> str:
     """
     Returns native proxy URI for Aria2 (--all-proxy option), or empty string if no proxy configured.
     Format: [http|https]://[user:password@]host:port
-    Note: For SOCKS proxies, Aria2 requires a local HTTP-to-SOCKS bridge.
     """
     if proxy_config is None:
         proxy_config = load_proxy_config()
-
-    if not isinstance(proxy_config, dict) or proxy_config.get("mode") != "manual":
+    
+    if not isinstance(proxy_config, dict):
         return ""
-
+        
+    if proxy_config.get("mode") != "manual":
+        return ""
+        
     host = str(proxy_config.get("host") or "").strip()
     if not host:
         return ""
-
+        
     ptype = str(proxy_config.get("type") or "http").lower()
     if ptype not in ("http", "https"):
-        # For non-HTTP proxies, Aria2 cannot connect directly
-        return ""
-
+        ptype = "http"
+        
     try:
         port = int(proxy_config.get("port") or 8080)
     except (ValueError, TypeError):
         port = 8080
-
+        
     user = str(proxy_config.get("user") or "")
     password = str(proxy_config.get("password") or "")
-
+    
     if proxy_config.get("auth") and user and password:
         from urllib.parse import quote
         encoded_user = quote(user, safe="")
@@ -694,11 +676,6 @@ def call_aria2_rpc(method, params=None, port=56800, token=""):
         f"\r\n"
     ).encode('utf-8') + payload
     
-    debug_active = is_debug_mode()
-    rpc_logger = logging.getLogger("bengal.engine.rpc")
-    if debug_active and method != "aria2.tellStatus":
-        rpc_logger.debug("[Aria2RPC] >>> Call: %s (port=%s, params_count=%d)", method, port, len(params))
-
     s = None
     try:
         # Use low-level socket to avoid high-level library proxy logic
@@ -716,43 +693,21 @@ def call_aria2_rpc(method, params=None, port=56800, token=""):
             except socket.timeout:
                 break
         
-        if not response:
-            if debug_active and method != "aria2.tellStatus":
-                rpc_logger.debug("[Aria2RPC] <<< No response from aria2 on port %s for %s", port, method)
-            return None
+        if not response: return None
         
         resp_str = response.decode('utf-8', errors='ignore')
-        body_start = resp_str.find("\r\n\r\n")
-        if body_start != -1:
-            body = resp_str[body_start + 4:].strip()
-            if body:
-                j_start = body.find('{')
-                j_end = body.rfind('}')
-                if j_start != -1 and j_end != -1:
-                    try:
-                        payload = json.loads(body[j_start:j_end + 1])
-                        if "result" in payload:
-                            parsed_res = payload["result"]
-                            if debug_active and method != "aria2.tellStatus":
-                                rpc_logger.debug("[Aria2RPC] <<< Success for %s: %s", method, str(parsed_res)[:200])
-                            return parsed_res
-                        if "error" in payload:
-                            err = payload.get("error") or {}
-                            err_code = err.get("code")
-                            err_msg = err.get("message")
-                            if debug_active and method != "aria2.tellStatus":
-                                rpc_logger.debug("[Aria2RPC] <<< RPC error for %s (code=%s): %s", method, err_code, err_msg)
-                            return None
-                    except Exception as parse_err:
-                        if debug_active and method != "aria2.tellStatus":
-                            rpc_logger.debug("[Aria2RPC] <<< JSON parse error for %s: %s", method, parse_err)
-
-        if debug_active and method != "aria2.tellStatus":
-            rpc_logger.debug("[Aria2RPC] <<< HTTP error response for %s: %s", method, resp_str[:200])
+        if "200 OK" in resp_str:
+            body_start = resp_str.find("\r\n\r\n")
+            if body_start != -1:
+                body = resp_str[body_start+4:].strip()
+                if body:
+                    # Robust JSON detection
+                    j_start = body.find('{')
+                    j_end = body.rfind('}')
+                    if j_start != -1 and j_end != -1:
+                        return json.loads(body[j_start:j_end+1]).get("result")
         return None
-    except Exception as e:
-        if debug_active and method != "aria2.tellStatus":
-            rpc_logger.debug("[Aria2RPC] <<< Connection error on %s: %s", method, e)
+    except:
         return None
     finally:
         if s:
@@ -776,15 +731,20 @@ def find_aria2():
     Prioritizes bundled embedded binaries, Flatpak sandbox paths, and local assets before falling back to system PATH.
     """
     arch = get_system_arch()
-    
+    is_windows = platform.system() == "Windows"
+    # Windows binaries live under assets/bin/windows/<arch>/aria2c.exe, parallel to the
+    # existing assets/bin/linux/<arch>/aria2c convention.
+    plat_folder = "windows" if is_windows else "linux"
+    bin_name = "aria2c.exe" if is_windows else "aria2c"
+
     # 1. PyInstaller bundled location (sys._MEIPASS)
     meipass = getattr(sys, '_MEIPASS', None)
     if meipass:
         for candidate in [
-            os.path.join(meipass, "assets", "bin", "linux", arch, "aria2c"),
-            os.path.join(meipass, "assets", "bin", arch, "aria2c"),
-            os.path.join(meipass, "assets", "bin", "aria2c"),
-            os.path.join(meipass, "bin", "aria2c")
+            os.path.join(meipass, "assets", "bin", plat_folder, arch, bin_name),
+            os.path.join(meipass, "assets", "bin", arch, bin_name),
+            os.path.join(meipass, "assets", "bin", bin_name),
+            os.path.join(meipass, "bin", bin_name)
         ]:
             if os.path.exists(candidate) and os.access(candidate, os.X_OK):
                 return candidate
@@ -816,60 +776,75 @@ def find_aria2():
     src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     root_dir = os.path.dirname(src_dir)
     for candidate in [
-        os.path.join(root_dir, "assets", "bin", "linux", arch, "aria2c"),
-        os.path.join(root_dir, "assets", "bin", arch, "aria2c"),
-        os.path.join(root_dir, "assets", "bin", "aria2c"),
-        os.path.join(src_dir, "assets", "bin", "linux", arch, "aria2c"),
-        os.path.join(src_dir, "assets", "bin", arch, "aria2c")
+        os.path.join(root_dir, "assets", "bin", plat_folder, arch, bin_name),
+        os.path.join(root_dir, "assets", "bin", arch, bin_name),
+        os.path.join(root_dir, "assets", "bin", bin_name),
+        os.path.join(src_dir, "assets", "bin", plat_folder, arch, bin_name),
+        os.path.join(src_dir, "assets", "bin", arch, bin_name)
     ]:
         if os.path.exists(candidate) and os.access(candidate, os.X_OK):
             return candidate
 
-    # 4. System PATH
-    system_aria2 = shutil.which("aria2c")
+    # 4. System PATH. shutil.which() on Windows tries PATHEXT (.EXE, .BAT, ...) against
+    # the given name automatically, so passing the .exe-suffixed bin_name works directly.
+    system_aria2 = shutil.which(bin_name)
     if system_aria2:
         return system_aria2
 
-    # 5. Application data directory / local user bin
+    # 5. Application data directory / local user bin (the ~/.local/bin convenience
+    # symlink is a Linux-only concept, so it's skipped on Windows).
     data_dir = get_data_dir()
-    for candidate in [
-        os.path.join(data_dir, "bin", "aria2c"),
-        os.path.expanduser("~/.local/bin/aria2c")
-    ]:
+    app_data_candidates = [os.path.join(data_dir, "bin", bin_name)]
+    if not is_windows:
+        app_data_candidates.append(os.path.expanduser("~/.local/bin/aria2c"))
+    for candidate in app_data_candidates:
         if os.path.exists(candidate) and os.access(candidate, os.X_OK):
             return candidate
 
     return None
 
 def ensure_aria2():
-    eng_logger = logging.getLogger("bengal.engine")
-    debug_active = is_debug_mode()
     found = find_aria2()
     if found:
-        if debug_active:
-            eng_logger.debug("[Aria2Setup] Found existing aria2c binary: %s", found)
         return found
-    
+
+    is_windows = platform.system() == "Windows"
+    bin_name = "aria2c.exe" if is_windows else "aria2c"
+
     data_dir = get_data_dir()
     bin_dir = os.path.join(data_dir, "bin")
     os.makedirs(bin_dir, exist_ok=True)
-    local_aria2 = os.path.join(bin_dir, "aria2c")
-    
+    local_aria2 = os.path.join(bin_dir, bin_name)
+
     try:
         arch = get_system_arch()
-        if arch == "x86_64":
-            url = "https://github.com/abcfy2/aria2-static-build/releases/download/1.37.0/aria2-x86_64-linux-musl_static.zip"
-        elif arch == "aarch64":
-            url = "https://github.com/abcfy2/aria2-static-build/releases/download/1.37.0/aria2-aarch64-linux-musl_static.zip"
-        elif arch == "i686":
-            url = "https://github.com/abcfy2/aria2-static-build/releases/download/1.37.0/aria2-i686-linux-musl_static.zip"
+        if is_windows:
+            # Official aria2/aria2 releases. abcfy2/aria2-static-build (used below for
+            # Linux) is a musl-static-only project and does not publish Windows assets,
+            # so Windows uses the upstream project's own release instead.
+            # NOTE: pinned to release-1.37.0 (current stable as of this writing) because,
+            # unlike abcfy2's build, upstream aria2 bakes the version into the asset
+            # filename -- there is no version-agnostic "latest" filename to point at.
+            # Bump this tag/filename when aria2 cuts a new release.
+            if arch == "x86_64":
+                url = "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip"
+            elif arch == "i686":
+                url = "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-32bit-build1.zip"
+            else:
+                # aria2 does not currently publish an official Windows ARM64 build.
+                # ARM64 Windows (11+) falls back to x86_64 emulation for anything a user
+                # installs manually and puts on PATH (picked up by find_aria2() above);
+                # there is nothing this function can auto-download for that arch today.
+                return None
         else:
-            if debug_active:
-                eng_logger.warning("[Aria2Setup] Unsupported system architecture: %s", arch)
-            return None
-            
-        if debug_active:
-            eng_logger.debug("[Aria2Setup] Downloading static aria2c (%s) from %s", arch, url)
+            if arch == "x86_64":
+                url = "https://github.com/abcfy2/aria2-static-build/releases/download/1.37.0/aria2-x86_64-linux-musl_static.zip"
+            elif arch == "aarch64":
+                url = "https://github.com/abcfy2/aria2-static-build/releases/download/1.37.0/aria2-aarch64-linux-musl_static.zip"
+            elif arch == "i686":
+                url = "https://github.com/abcfy2/aria2-static-build/releases/download/1.37.0/aria2-i686-linux-musl_static.zip"
+            else: return None
+
         temp_file = os.path.join(data_dir, "aria2.zip")
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req) as resp:
@@ -879,26 +854,25 @@ def ensure_aria2():
         import zipfile
         with zipfile.ZipFile(temp_file, "r") as z:
             for name in z.namelist():
-                if name.endswith("aria2c"):
+                if name.endswith(bin_name):
                     data = z.read(name)
                     with open(local_aria2, "wb") as out:
                         out.write(data)
                     break
         os.remove(temp_file)
         os.chmod(local_aria2, 0o755)
-        
-        local_bin = os.path.expanduser("~/.local/bin")
-        os.makedirs(local_bin, exist_ok=True)
-        symlink_path = os.path.join(local_bin, "aria2c")
-        if not os.path.exists(symlink_path):
-            try: os.symlink(local_aria2, symlink_path)
-            except: pass
-        if debug_active:
-            eng_logger.debug("[Aria2Setup] Successfully installed aria2c at %s", local_aria2)
+
+        # The ~/.local/bin convenience symlink is a Linux-only convention; Windows has
+        # no equivalent PATH location this app manages, so it's skipped there.
+        if not is_windows:
+            local_bin = os.path.expanduser("~/.local/bin")
+            os.makedirs(local_bin, exist_ok=True)
+            symlink_path = os.path.join(local_bin, "aria2c")
+            if not os.path.exists(symlink_path):
+                try: os.symlink(local_aria2, symlink_path)
+                except: pass
         return local_aria2
-    except Exception as e:
-        if debug_active:
-            eng_logger.error("[Aria2Setup] Failed to acquire aria2c: %s", e)
+    except Exception:
         return None
 
 def get_clean_env(extra_paths=None):
@@ -962,11 +936,24 @@ def get_clean_env(extra_paths=None):
             else:
                 clean_env.pop(k, None)
 
-    # 5. Prepend extra tool paths to PATH if provided
+    # 5. Prepend extra tool paths to PATH if provided.
+    # NOTE: must use os.pathsep here, not a literal ":" -- Windows' PATH separator is
+    # ";" (":" is reserved for drive letters, e.g. "C:\"), so a hardcoded ":" would
+    # splice two entries into one malformed path segment on Windows.
     if extra_paths:
-        clean_env["PATH"] = f"{extra_paths}:{clean_env.get('PATH', '')}"
+        clean_env["PATH"] = f"{extra_paths}{os.pathsep}{clean_env.get('PATH', '')}"
 
     return clean_env
+
+def get_subprocess_creationflags():
+    """
+    Returns the subprocess.Popen(creationflags=...) value needed to stop console-mode
+    child processes (aria2c, ffmpeg, yt-dlp, deno, ...) from flashing a visible console
+    window when launched from this windowed GUI app on Windows. No-op (0) elsewhere.
+    """
+    if platform.system() == "Windows":
+        return subprocess.CREATE_NO_WINDOW
+    return 0
 
 def open_file_generic(path):
     """
@@ -1649,47 +1636,32 @@ def choose_portal_open_file_path(title="Select File", folder=""):
     return None
 
 
-LEGACY_AUTOSTART_FILENAMES = (
-    "bd.com.zihad.BengalDownloadManager.desktop",
-    "bengal-download-manager.desktop",
-    "io.github.tazihad.bengal-download-manager.desktop",
-)
-
-
 def get_autostart_filepath():
     autostart_dir = os.path.expanduser("~/.config/autostart")
-    filename = "bd.com.zihad.BengalDownloadManager.desktop"
+    return os.path.join(autostart_dir, "io.github.tazihad.bengal-download-manager.desktop")
 
-    # If running inside Snap, synchronize with the active snap.yaml declaration if present
-    snap_dir = os.environ.get("SNAP")
-    if snap_dir:
-        filename = f"{os.environ.get('SNAP_NAME', 'bengal-download-manager')}.desktop"
-        meta_yaml = os.path.join(snap_dir, "meta", "snap.yaml")
-        if os.path.exists(meta_yaml):
-            try:
-                with open(meta_yaml, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line.startswith("autostart:"):
-                            val = line.split(":", 1)[1].strip()
-                            if val:
-                                filename = val
-                                break
-            except Exception:
-                pass
 
-    return os.path.join(autostart_dir, filename)
+# Windows autostart uses a per-user HKCU Run registry value rather than a Linux
+# .desktop file -- there's no single "file path" to represent it, so it's handled as
+# its own branch in is_autostart_enabled()/set_autostart_enabled() below rather than
+# folded into get_autostart_filepath()'s contract (tests monkeypatch that function
+# expecting it to keep returning a filesystem path for the Linux mechanism).
+_WINDOWS_AUTOSTART_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+_WINDOWS_AUTOSTART_VALUE_NAME = "BengalDownloadManager"
 
 
 def is_autostart_enabled():
+    if platform.system() == "Windows":
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _WINDOWS_AUTOSTART_KEY, 0, winreg.KEY_READ) as key:
+                winreg.QueryValueEx(key, _WINDOWS_AUTOSTART_VALUE_NAME)
+                return True
+        except OSError:
+            return False
+
     filepath = get_autostart_filepath()
-    if os.path.exists(filepath):
-        return True
-    autostart_dir = os.path.dirname(filepath)
-    for legacy_name in LEGACY_AUTOSTART_FILENAMES:
-        if os.path.exists(os.path.join(autostart_dir, legacy_name)):
-            return True
-    return False
+    return os.path.exists(filepath)
 
 
 def get_executable_command(start_minimized=False):
@@ -1702,7 +1674,7 @@ def get_executable_command(start_minimized=False):
 
     # 2. Check if running inside Flatpak
     if os.path.exists("/.flatpak-info") or os.environ.get("FLATPAK_ID"):
-        flatpak_id = os.environ.get("FLATPAK_ID", "bd.com.zihad.BengalDownloadManager")
+        flatpak_id = os.environ.get("FLATPAK_ID", "io.github.tazihad.bengal-download-manager")
         return f'flatpak run {flatpak_id}{min_flag}'
 
     # 3. Check if running inside Snap
@@ -1720,68 +1692,56 @@ def get_executable_command(start_minimized=False):
 
 
 def set_autostart_enabled(enabled, start_minimized=False):
+    if platform.system() == "Windows":
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _WINDOWS_AUTOSTART_KEY, 0, winreg.KEY_WRITE) as key:
+                if enabled:
+                    exec_cmd = get_executable_command(start_minimized)
+                    winreg.SetValueEx(key, _WINDOWS_AUTOSTART_VALUE_NAME, 0, winreg.REG_SZ, exec_cmd)
+                else:
+                    try:
+                        winreg.DeleteValue(key, _WINDOWS_AUTOSTART_VALUE_NAME)
+                    except FileNotFoundError:
+                        pass  # Already not set -- treat as success, matching the Linux
+                              # branch's "no file to remove" == True behavior below.
+            return True
+        except OSError as e:
+            print(f"Failed to update Windows autostart registry entry: {e}")
+            return False
+
     filepath = get_autostart_filepath()
-    autostart_dir = os.path.dirname(filepath)
     if enabled:
         exec_cmd = get_executable_command(start_minimized)
-        wmclass = "bd.com.zihad.BengalDownloadManager"
-        icon_val = "bd.com.zihad.BengalDownloadManager"
-        if os.environ.get("SNAP"):
-            snap_instance = os.environ.get("SNAP_INSTANCE_NAME") or os.environ.get("SNAP_NAME", "bengal-download-manager")
-            snap_app = os.environ.get("SNAP_APP_NAME", "bengal-download-manager")
-            wmclass = f"{snap_instance}_{snap_app}"
-            icon_val = f"/snap/{snap_instance}/current/meta/gui/icon.png"
-
         desktop_content = f"""[Desktop Entry]
 Type=Application
 Name=Bengal Download Manager
 Comment=High-performance multi-threaded download manager
 Exec={exec_cmd}
-Icon={icon_val}
+Icon=io.github.tazihad.bengal-download-manager
 Terminal=false
-StartupWMClass={wmclass}
+StartupWMClass=io.github.tazihad.bengal-download-manager
 Categories=Network;FileTransfer;
 X-GNOME-Autostart-enabled=true
 """
         try:
-            os.makedirs(autostart_dir, exist_ok=True)
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(desktop_content)
             os.chmod(filepath, 0o755)
-
-            # Clean up any legacy or duplicate autostart desktop entries in this directory
-            # (In snap environments, unmatched .desktop files cause snap-userd to abort startup)
-            active_name = os.path.basename(filepath)
-            for legacy_name in LEGACY_AUTOSTART_FILENAMES:
-                if legacy_name != active_name:
-                    legacy_path = os.path.join(autostart_dir, legacy_name)
-                    if os.path.exists(legacy_path):
-                        try:
-                            os.remove(legacy_path)
-                        except Exception:
-                            pass
             return True
         except Exception as e:
             print(f"Failed to write autostart file: {e}")
             return False
     else:
-        # Remove target autostart file and any legacy autostart entries
-        success = True
-        for name in LEGACY_AUTOSTART_FILENAMES:
-            target = os.path.join(autostart_dir, name)
-            if os.path.exists(target):
-                try:
-                    os.remove(target)
-                except Exception as e:
-                    print(f"Failed to remove autostart file {target}: {e}")
-                    success = False
         if os.path.exists(filepath):
             try:
                 os.remove(filepath)
+                return True
             except Exception as e:
-                print(f"Failed to remove autostart file {filepath}: {e}")
-                success = False
-        return success
+                print(f"Failed to remove autostart file: {e}")
+                return False
+        return True
 
 
 POPULAR_MEDIA_DOMAINS = {
@@ -1819,55 +1779,14 @@ POPULAR_MEDIA_DOMAINS = {
 }
 
 
-GENERIC_MEDIA_TITLES = {
-    "facebook", "fb", "youtube", "yt", "instagram", "tiktok", "twitter", "x",
-    "reddit", "vimeo", "dailymotion", "twitch", "bilibili", "soundcloud",
-    "rumble", "kick", "streamable", "pinterest", "video", "videos", "watch",
-    "reel", "reels", "shorts", "clip", "media", "media stream", "video stream",
-    "untitled", "untitled media", "master", "index", "videoplayback", "stream",
-    "unknown", "post", "status", "media_download"
-}
-
-
-def is_generic_media_title(title: str) -> bool:
-    """
-    Returns True if the title is absent, empty, too short, or a generic platform name / placeholder.
-    """
-    if not title or not isinstance(title, str):
-        return True
-    t = title.strip().lower()
-    if not t or len(t) < 2:
-        return True
-    if t in GENERIC_MEDIA_TITLES:
-        return True
-    base, _ = os.path.splitext(t)
-    if base in GENERIC_MEDIA_TITLES:
-        return True
-    if re.match(r"^\(\d+\)\s*(facebook|twitter|x|instagram|notifications|reddit)", t):
-        return True
-    if re.match(r"^(facebook|twitter|instagram)\s*[-–—|]", t):
-        return True
-    return False
-
-
 def is_media_downloader_url(data):
     """
     Checks if the provided URL string originates from a popular media/video source
-    supported by yt-dlp, or represents an HLS/DASH streaming manifest (.m3u8, .mpd).
+    supported by yt-dlp.
     """
     if not data:
         return False
-    parts = str(data).split("|")
-    raw_url = parts[0].strip()
-    if len(parts) > 4 and parts[4] in ("1", "true", "True"):
-        try:
-            parsed = urlparse(raw_url)
-            netloc = parsed.netloc.lower().split(":")[0]
-            if any(netloc == d or netloc.endswith("." + d) for d in POPULAR_MEDIA_DOMAINS):
-                return is_canonical_media_page_url(raw_url)
-        except Exception:
-            pass
-        return True
+    raw_url = str(data).split("|", 1)[0].strip()
     try:
         parsed = urlparse(raw_url)
         netloc = parsed.netloc.lower()
@@ -1877,64 +1796,10 @@ def is_media_downloader_url(data):
             return False
         for domain in POPULAR_MEDIA_DOMAINS:
             if netloc == domain or netloc.endswith("." + domain):
-                return is_canonical_media_page_url(raw_url)
-        clean_url = raw_url.lower().split("?")[0].split("#")[0]
-        if (clean_url.endswith((".m3u8", ".mpd", ".m4s")) or
-            ".m3u8" in raw_url.lower() or
-            ".mpd" in raw_url.lower() or
-            "/videoplayback" in raw_url.lower() or
-            "/hls/" in raw_url.lower() or
-            "/hls2/" in raw_url.lower() or
-            "/dash/" in raw_url.lower()):
-            return True
+                return True
     except Exception:
         pass
     return False
-
-
-def is_canonical_media_page_url(data: str) -> bool:
-    """
-    Checks if a URL is a specific video/media page (with video ID/path),
-    and NOT just a root domain, home feed, or landing page (e.g. https://www.tiktok.com/).
-    """
-    if not data:
-        return False
-    raw_url = str(data).split("|")[0].strip()
-    try:
-        parsed = urlparse(raw_url)
-        path = parsed.path.rstrip("/").lower()
-        query = parsed.query.lower()
-        netloc = parsed.netloc.lower()
-        if ":" in netloc:
-            netloc = netloc.split(":")[0]
-
-        # Bare root or feed pages are NEVER single media pages
-        if not path or path in ("", "/", "/foryou", "/following", "/explore", "/live", "/home", "/feed"):
-            if not query or not ("v=" in query or "video_id=" in query or "watch" in query):
-                return False
-
-        # Short link and clip domains are always canonical video links if they have a path
-        if any(short in netloc for short in ("vt.tiktok.com", "vm.tiktok.com", "fb.watch", "youtu.be", "dai.ly", "pin.it", "v.redd.it", "clips.twitch.tv")):
-            return len(path) > 1
-
-        # Platform specific checks:
-        if "tiktok.com" in netloc:
-            return "/video/" in path or "/v/" in path or bool(re.search(r"/\d{18,20}", path))
-        if "facebook.com" in netloc:
-            return "/reel/" in path or "/watch" in path or "/videos/" in path or "v=" in query
-        if "instagram.com" in netloc:
-            return "/reel/" in path or "/p/" in path or "/tv/" in path or "/reels/" in path
-        if "twitter.com" in netloc or "x.com" in netloc:
-            return "/status/" in path
-        if "youtube.com" in netloc:
-            return "v=" in query or "/shorts/" in path or "/embed/" in path or "/watch" in path
-        if "reddit.com" in netloc:
-            return "/comments/" in path
-
-        # For generic sites, if path has more than just '/'
-        return len(path) > 1
-    except Exception:
-        return False
 
 
 def sanitize_media_url(data: str) -> str:
@@ -1996,10 +1861,9 @@ def sanitize_media_filename(title: str, ext: str = ".mp4", max_len: int = 90) ->
     if not clean_base:
         clean_base = "media"
 
-    # Extract any existing tags or duplicate counter suffixes like " [id] [1080p]", " (1)", " [id] (1)"
-    pattern = r'^(.*?)(\s*(?:\[[^\]]+\]|\(\d+\))+(?:\s*(?:\[[^\]]+\]|\(\d+\)))*)$'
-    m = re.search(pattern, clean_base)
-    if m and m.group(2).strip():
+    # Extract any existing duplicate counter suffix like " (1)", " (2)"
+    m = re.search(r'^(.*?)(\s*\(\d+\))$', clean_base)
+    if m:
         main_part, suffix = m.group(1), m.group(2)
         eff_limit = max(10, max_len - len(suffix.encode("utf-8")))
         while len(main_part.encode("utf-8")) > eff_limit:
@@ -2146,48 +2010,6 @@ def determine_next_release_tag(
 
     version = tag[1:] if tag.startswith("v") else tag
     return tag, version
-
-
-def wrap_url_tooltip(url: str, max_line_len: int = 80) -> str:
-    """
-    Wraps long URLs for display in tooltips so they do not exceed screen width.
-    Breaks preferentially after natural URL delimiters (&, ?, /, =, ;) when
-    approaching max_line_len, or hard breaks at max_line_len if no delimiter exists.
-    """
-    if not url:
-        return ""
-    if len(url) <= max_line_len:
-        return url
-
-    delimiters = {'?', '&', '/', '=', ';', '#'}
-    lines = []
-    current_line = []
-    current_len = 0
-    min_break_len = max(40, max_line_len - 25)
-
-    for i, c in enumerate(url):
-        current_line.append(c)
-        current_len += 1
-
-        if c in delimiters and current_len >= min_break_len:
-            # Avoid breaking inside the protocol scheme (e.g. http://)
-            if c == '/' and i >= 1 and url[i - 1] == '/' and i >= 2 and url[i - 2] == ':':
-                continue
-            if c == '/' and i + 1 < len(url) and url[i + 1] == '/':
-                continue
-            lines.append("".join(current_line))
-            current_line = []
-            current_len = 0
-        elif current_len >= max_line_len:
-            lines.append("".join(current_line))
-            current_line = []
-            current_len = 0
-
-    if current_line:
-        lines.append("".join(current_line))
-
-    return "\n".join(lines)
-
 
 
 

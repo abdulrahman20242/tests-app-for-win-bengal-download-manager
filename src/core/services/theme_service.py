@@ -15,24 +15,20 @@ import platform
 from pathlib import Path
 from typing import Optional, Tuple, List
 
-from PyQt6.QtWidgets import QApplication, QStyle, QFileIconProvider, QMainWindow, QDialog
+from PyQt6.QtWidgets import QApplication, QStyle, QFileIconProvider
 from PyQt6.QtGui import QColor, QPalette, QIcon, QFont, QPixmap, QImage, QPainter
-from PyQt6.QtCore import Qt, QFileInfo, QMimeDatabase, QLocale, QEvent, QTimer, QByteArray, QObject
+from PyQt6.QtCore import Qt, QFileInfo, QMimeDatabase
 
 from core.utils import get_data_dir
 
-import ctypes
-
 # Optional Windows API for accent extraction
 if platform.system() == "Windows":
+    import ctypes
     from ctypes import wintypes
 
 # Optional GIO/GSettings for GNOME
 _HAS_GIO = False
 try:
-    if getattr(sys, 'frozen', False) or os.environ.get("APPIMAGE") or os.environ.get("APPDIR"):
-        os.environ["GIO_MODULE_DIR"] = "/dev/null"
-        os.environ.pop("GIO_EXTRA_MODULES", None)
     import gi
     gi.require_version('Gio', '2.0')
     from gi.repository import Gio
@@ -298,10 +294,7 @@ ACCENT_COLORS = {
     "Amethyst Violet": "#9b59b6",
     "Obsidian Purple": "#dab9ff",
     "Material Cobalt": "#a8c7fa",
-    "Material Violet": "#d0bcff",
-    "Stellar Blue": "#4488dd",
-    "TMOG Cyan": "#00e5ff",
-    "Cyber Cyan": "#00e5ff",
+    "Material Violet": "#d0bcff"
 }
 
 
@@ -381,27 +374,21 @@ def _build_palette(bg, text, base, alt, btn, link, hl, hl_text, accent=None):
     return pal
 
 
-def normalize_theme_name(name, default="BDM Auto (Default)"):
+def normalize_theme_name(name, default="BDM Dark (Default)"):
     if not name:
         return default
     s = str(name).strip()
     s_lower = s.lower()
-    if s_lower in ("bdm auto (default)", "bdm auto", "bdmauto", "automatic", "auto"):
-        return "BDM Auto (Default)"
     if s_lower in ("bdm dark (default)", "bdm dark", "bdmdark", "dark"):
-        return "BDM Dark"
+        return "BDM Dark (Default)"
+    if s_lower in ("bdm auto (default)", "bdm auto", "bdmauto", "automatic", "auto"):
+        return "BDM Auto"
     if s_lower == "system":
         return "System"
     if s_lower in ("bdm light", "bdmlight", "light"):
         return "BDM Light"
     if s_lower in ("twilight", "twilight dark"):
         return "Twilight"
-    if s_lower in ("stellar dark", "stellardark"):
-        return "Stellar Dark"
-    if s_lower in ("stellar light", "stellarlight"):
-        return "Stellar Light"
-    if s_lower in ("tmog dark", "tmog", "tmogdark", "cyberpunk tmog", "cyber tmog", "cyber"):
-        return "TMOG Dark"
     return s
 
 
@@ -416,10 +403,6 @@ def normalize_accent_name(name, default="BDM (Default)"):
         return "System"
     if s_lower in ("twilight", "twilight violet"):
         return "Twilight"
-    if s_lower in ("stellar", "stellar blue", "stellarblue"):
-        return "Stellar Blue"
-    if s_lower in ("tmog", "tmog cyan", "tmogcyan", "cyber cyan", "cybercyan", "electric cyan"):
-        return "TMOG Cyan"
     return s
 
 
@@ -436,10 +419,6 @@ def normalize_icon_theme_name(name, default="BDM Auto (Default)"):
         return "Modern Color"
     elif s_lower in ("yaru", "ubuntu yaru"):
         return "Yaru"
-    elif s_lower in ("stellar", "stellar icons", "stellaricons"):
-        return "Stellar"
-    elif s_lower in ("tmog neon", "tmog", "tmogneon", "cyber neon", "cyberneon", "cyber"):
-        return "TMOG Neon"
     elif s_lower in ("bdm", "bdm auto (default)", "bdm auto", "bdmauto", "bdm (default)", "default", "automatic"):
         return "BDM Auto (Default)"
     return s
@@ -455,369 +434,8 @@ def normalize_tray_icon_name(name, default="App Icon (Default)"):
     return s
 
 
-def normalize_titlebar_name(name, default="Automatic"):
-    if not name:
-        return default
-    s = str(name).strip()
-    s_lower = s.lower()
-    if s_lower in ("auto", "auto (default)", "automatic", "system", "default"):
-        return "Automatic"
-    if s_lower in ("light", "system light", "system light title bar"):
-        return "Light"
-    if s_lower in ("dark", "system dark", "system dark title bar"):
-        return "Dark"
-    return default
-
-
-CURRENT_THEME = "BDM Auto (Default)"
 CURRENT_ICON_THEME = "Automatic"
 CURRENT_TRAY_ICON = "App Icon (Default)"
-CURRENT_TITLE_BAR_MODE = "Automatic"
-
-
-def _find_kde_color_scheme(is_dark: bool) -> Tuple[str, str]:
-    """
-    Returns (scheme_name, scheme_path_or_name)
-    """
-    if is_dark:
-        candidates = [
-            "/usr/share/color-schemes/BreezeDark.colors",
-            "/usr/local/share/color-schemes/BreezeDark.colors",
-            str(xdg_data_home() / "color-schemes" / "BreezeDark.colors"),
-            "BreezeDark"
-        ]
-        default_name = "BreezeDark"
-    else:
-        candidates = [
-            "/usr/share/color-schemes/BreezeLight.colors",
-            "/usr/share/color-schemes/BreezeClassic.colors",
-            "/usr/local/share/color-schemes/BreezeLight.colors",
-            str(xdg_data_home() / "color-schemes" / "BreezeLight.colors"),
-            "BreezeLight"
-        ]
-        default_name = "BreezeLight"
-
-    for c in candidates:
-        if c.startswith("/") and os.path.isfile(c):
-            return default_name, c
-    return default_name, default_name
-
-
-def _apply_in_process_gtk_theme(is_dark: bool, mode: str = "Auto") -> bool:
-    """Sets in-process environment variable for Wayland libdecor GTK plugin without mutating global settings."""
-    try:
-        if mode in ("Auto", "Automatic"):
-            os.environ.pop("GTK_THEME", None)
-        elif is_dark:
-            os.environ["GTK_THEME"] = "Adwaita:dark"
-        else:
-            os.environ["GTK_THEME"] = "Adwaita:light"
-        return True
-    except Exception:
-        return False
-
-def is_gnome_desktop() -> bool:
-    """
-    Detects whether the running desktop environment is GNOME, GTK-based, Ubuntu, or derivative.
-    Matches GNOME, Ubuntu, Pop!_OS, Cinnamon, MATE, XFCE, Budgie, Pantheon, Cosmic, Deepin, LXDE.
-    """
-    if os.environ.get("BDM_FORCE_CSD") == "1":
-        return True
-    if os.environ.get("BDM_DISABLE_CSD") == "1":
-        return False
-    desktop = (
-        os.environ.get("XDG_CURRENT_DESKTOP", "") + ":" +
-        os.environ.get("GDMSESSION", "") + ":" +
-        os.environ.get("XDG_SESSION_DESKTOP", "") + ":" +
-        os.environ.get("DESKTOP_SESSION", "")
-    ).upper()
-    gtk_desktops = (
-        "GNOME", "UBUNTU", "UNITY", "POPOS", "POP", "PANTHEON",
-        "CINNAMON", "X-CINNAMON", "MATE", "XFCE", "X-XFCE",
-        "BUDGIE", "COSMIC", "DEEPIN", "DDE", "LXDE"
-    )
-    return any(d in desktop for d in gtk_desktops)
-
-
-is_gnome_or_gtk_desktop = is_gnome_desktop
-
-
-def _apply_gnome_csd_titlebar(mode: str, is_dark: bool, windows: list):
-    """
-    On GNOME and GTK-based distros, apply custom Libadwaita Client-Side Decorations (CSD).
-    Title bar theme options:
-      - 'Automatic': Uses default system native title bar (CSD detached)
-      - 'Light': Custom Libadwaita light headerbar
-      - 'Dark': Custom Libadwaita dark headerbar
-    """
-    try:
-        from ui.components.csd_titlebar import attach_csd, detach_csd
-        for w in windows:
-            if not w:
-                continue
-            if mode in ("Light", "Dark"):
-                attach_csd(w, is_dark=is_dark, mode=mode)
-            else:
-                detach_csd(w)
-    except Exception:
-        pass
-
-
-def apply_titlebar_theme(title_bar_mode="Automatic", window=None, app=None):
-    """
-    Applies Title bar theme:
-      - 'Automatic': Follows system theme with native system title bar
-      - 'Light': System light title bar (or custom CSD on GNOME)
-      - 'Dark': System dark title bar (or custom CSD on GNOME)
-    """
-    global CURRENT_TITLE_BAR_MODE
-    mode = normalize_titlebar_name(title_bar_mode)
-    CURRENT_TITLE_BAR_MODE = mode
-
-    if app is None:
-        app = QApplication.instance()
-    if not app:
-        return
-    init_titlebar_filter(app)
-
-    global _THEME_CHANGE_ACTIVE
-    _THEME_CHANGE_ACTIVE = True
-    QTimer.singleShot(250, _clear_theme_change_active)
-
-    if mode == "Dark":
-        is_dark = True
-    elif mode == "Light":
-        is_dark = False
-    else:  # "Automatic" -> follow system theme
-        is_dark = is_system_dark_theme(app)
-
-    # 1. Cross-platform Qt styleHints (Qt 6.5+ sets Wayland / libdecor / macOS / Windows titlebar scheme)
-    sh = app.styleHints()
-    if hasattr(sh, "setColorScheme") and hasattr(Qt, "ColorScheme"):
-        sh.setColorScheme(Qt.ColorScheme.Dark if is_dark else Qt.ColorScheme.Light)
-
-    all_windows = []
-    if window and isinstance(window, (QMainWindow, QDialog)) and window.windowType() in (Qt.WindowType.Window, Qt.WindowType.Dialog):
-        all_windows.append(window)
-    for w in app.topLevelWidgets():
-        if w and w.isWindow() and isinstance(w, (QMainWindow, QDialog)) and w.windowType() in (Qt.WindowType.Window, Qt.WindowType.Dialog) and w not in all_windows:
-            all_windows.append(w)
-
-    scheme_name, scheme_path = _find_kde_color_scheme(is_dark)
-
-    # Dynamic Qt/KDE application and window properties
-    try:
-        app.setProperty("KDE_COLOR_SCHEME_PATH", scheme_path)
-        app.setProperty("_KDE_NET_WM_COLOR_SCHEME", scheme_name)
-    except Exception:
-        pass
-
-    for w in all_windows:
-        try:
-            w.setProperty("KDE_COLOR_SCHEME_PATH", scheme_path)
-            w.setProperty("_KDE_NET_WM_COLOR_SCHEME", scheme_name)
-            if hasattr(w, "windowHandle") and w.windowHandle():
-                w.windowHandle().setProperty("KDE_COLOR_SCHEME_PATH", scheme_path)
-                w.windowHandle().setProperty("_KDE_NET_WM_COLOR_SCHEME", scheme_name)
-        except Exception:
-            pass
-
-    # 2. Windows DWM immersive dark mode
-    if sys.platform == "win32":
-        try:
-            import ctypes
-            dwm = ctypes.windll.dwmapi
-            DWMWA_USE_IMMERSIVE_DARK_MODE = 20
-            DWMWA_USE_IMMERSIVE_DARK_MODE_OLD = 19
-            val = ctypes.c_int(1 if is_dark else 0)
-
-            hwnds = set()
-            for w in all_windows:
-                if hasattr(w, "winId"):
-                    try:
-                        hwnds.add(int(w.winId()))
-                    except Exception:
-                        pass
-            for hwnd in hwnds:
-                res = dwm.DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ctypes.byref(val), ctypes.sizeof(val))
-                if res != 0:
-                    dwm.DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE_OLD, ctypes.byref(val), ctypes.sizeof(val))
-        except Exception:
-            pass
-
-    # 3. Linux X11 / XWayland _GTK_THEME_VARIANT and _KDE_NET_WM_COLOR_SCHEME
-    if sys.platform.startswith("linux"):
-        try:
-            variant = "dark" if is_dark else "light"
-            import shutil, subprocess
-            if shutil.which("xprop"):
-                hwnds = set()
-                for w in all_windows:
-                    if hasattr(w, "winId") and w.isVisible():
-                        try:
-                            hwnds.add(int(w.winId()))
-                        except Exception:
-                            pass
-                for wid in hwnds:
-                    try:
-                        subprocess.run(
-                            ["xprop", "-id", str(wid), "-f", "_GTK_THEME_VARIANT", "8s", "-set", "_GTK_THEME_VARIANT", variant],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.5
-                        )
-                        subprocess.run(
-                            ["xprop", "-id", str(wid), "-f", "_KDE_NET_WM_COLOR_SCHEME", "8s", "-set", "_KDE_NET_WM_COLOR_SCHEME", scheme_name],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.5
-                        )
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
-    # 3b. In-process GTK decoration preference (for libdecor-gtk on Wayland, zero system mutation)
-    if sys.platform.startswith("linux"):
-        _apply_in_process_gtk_theme(is_dark, mode)
-
-    # 5. Linux GNOME / GTK Client-Side Decoration (CSD) - only for custom Light/Dark, Automatic uses system default titlebar
-    if sys.platform.startswith("linux") and is_gnome_desktop() and mode in ("Light", "Dark"):
-        _apply_gnome_csd_titlebar(mode, is_dark, all_windows)
-    else:
-        try:
-            from ui.components.csd_titlebar import detach_csd
-            for w in all_windows:
-                if w and getattr(w, "_csd_titlebar", None) is not None:
-                    detach_csd(w)
-        except Exception:
-            pass
-
-
-def get_current_titlebar_mode() -> str:
-    """Returns the current active title bar theme mode ('Automatic', 'Light', or 'Dark')."""
-    global CURRENT_TITLE_BAR_MODE
-    return CURRENT_TITLE_BAR_MODE
-
-
-class _TitleBarEventFilter(QObject):
-    """
-    Application-wide event filter to ensure that any top-level window or dialog
-    (e.g., Options, Media Downloader, Add URL, Progress dialogs) automatically receives
-    the active title bar theme decoration when shown.
-    """
-    def eventFilter(self, watched, event):
-        try:
-            if event.type() == QEvent.Type.Show:
-                if hasattr(watched, "isWindow") and watched.isWindow():
-                    if isinstance(watched, (QMainWindow, QDialog)) and watched.windowType() in (Qt.WindowType.Window, Qt.WindowType.Dialog):
-                        mode = get_current_titlebar_mode()
-                        if mode in ("Light", "Dark"):
-                            apply_titlebar_theme(mode, window=watched)
-                        else:
-                            # Automatic mode: Window inherits app-level styleHints & GTK_THEME automatically.
-                            # Ensure no leftover custom CSD is attached.
-                            if getattr(watched, "_csd_titlebar", None) is not None:
-                                from ui.components.csd_titlebar import detach_csd
-                                detach_csd(watched)
-        except Exception:
-            pass
-        return super().eventFilter(watched, event)
-
-
-_GLOBAL_TITLEBAR_FILTER = None
-
-
-def init_titlebar_filter(app: Optional[QApplication] = None):
-    """
-    Installs the global title bar event filter on the QApplication instance once.
-    """
-    global _GLOBAL_TITLEBAR_FILTER
-    if "PYTEST_CURRENT_TEST" in os.environ:
-        return
-    if app is None:
-        app = QApplication.instance()
-    if not app or _GLOBAL_TITLEBAR_FILTER is not None:
-        return
-    _GLOBAL_TITLEBAR_FILTER = _TitleBarEventFilter(app)
-    app.installEventFilter(_GLOBAL_TITLEBAR_FILTER)
-
-
-_THEME_CHANGE_ACTIVE = False
-
-
-def is_theme_change_active() -> bool:
-    """Returns True if an internal programmatic theme or title bar change is currently executing."""
-    global _THEME_CHANGE_ACTIVE
-    if "PYTEST_CURRENT_TEST" in os.environ:
-        return False
-    return _THEME_CHANGE_ACTIVE
-
-
-def _clear_theme_change_active():
-    global _THEME_CHANGE_ACTIVE
-    _THEME_CHANGE_ACTIVE = False
-
-
-def is_system_dark_theme(app=None) -> bool:
-    """
-    Detects whether the underlying desktop environment/system theme is dark.
-    First queries the XDG Desktop Portal on Linux via D-Bus for real-time accuracy,
-    then falls back to QStyleHints.colorScheme() and standardPalette().
-    """
-    try:
-        from PyQt6 import QtDBus
-        bus = QtDBus.QDBusConnection.sessionBus()
-        if bus.isConnected():
-            msg = QtDBus.QDBusMessage.createMethodCall(
-                "org.freedesktop.portal.Desktop",
-                "/org/freedesktop/portal/desktop",
-                "org.freedesktop.portal.Settings",
-                "Read"
-            )
-            msg.setArguments(["org.freedesktop.appearance", "color-scheme"])
-            reply = bus.call(msg)
-            if reply.type() == QtDBus.QDBusMessage.MessageType.ReplyMessage and reply.arguments():
-                val = reply.arguments()[0]
-                if isinstance(val, QtDBus.QDBusVariant):
-                    val = val.variant()
-                # 1 = Prefer Dark, 0 = No preference / Light, 2 = Prefer Light
-                return int(val) == 1
-    except Exception:
-        pass
-
-    if app is None:
-        app = QApplication.instance()
-    if app:
-        sh = app.styleHints()
-        if hasattr(sh, "colorScheme"):
-            cs = sh.colorScheme()
-            if cs == Qt.ColorScheme.Dark:
-                return True
-            elif cs == Qt.ColorScheme.Light:
-                return False
-        sys_pal = app.style().standardPalette()
-        return sys_pal.color(QPalette.ColorRole.Window).value() < 128 or sys_pal.color(QPalette.ColorRole.WindowText).value() > 128
-    return False
-
-
-def is_dark_theme(app=None) -> bool:
-    """Returns True if the current active theme is dark, False if light."""
-    global CURRENT_THEME
-    t_lower = str(CURRENT_THEME).strip().lower() if 'CURRENT_THEME' in globals() and CURRENT_THEME else ""
-    if t_lower in ("bdm dark", "bdm dark (default)", "bdmdark", "dark", "ubuntu dark", "ubuntudark", "kirigami dark", "kirigamidark", "dracula", "nord", "obsidian flow", "obsidian", "material you dark", "one dark", "onedark", "catppuccin", "catppuccin mocha", "solarized dark", "solarizeddark", "twilight", "twilight dark", "breeze dark", "breezedark", "stellar dark", "stellardark", "tmog dark", "tmog", "tmogdark", "cyberpunk tmog", "cyber tmog", "cyber"):
-        return True
-    if t_lower in ("bdm light", "bdmlight", "light", "ubuntu light", "ubuntulight", "idm classic", "idm", "windows classic", "kirigami light", "kirigamilight", "material you light", "material light", "solarized light", "solarizedlight", "breeze light", "breezelight", "breeze white", "stellar light", "stellarlight"):
-        return False
-    if t_lower in ("bdm auto (default)", "bdm auto", "bdmauto", "automatic", "auto", "system"):
-        return is_system_dark_theme(app)
-    if app is None:
-        app = QApplication.instance()
-    if app:
-        pal = app.palette()
-        bg_val = pal.color(QPalette.ColorRole.Window).value()
-        base_val = pal.color(QPalette.ColorRole.Base).value()
-        text_val = pal.color(QPalette.ColorRole.WindowText).value()
-        if bg_val < 128 or base_val < 128 or text_val > 128:
-            return True
-        return False
-    return True
 
 
 def is_monochrome_icon_theme(icon_theme_name=None) -> bool:
@@ -833,21 +451,14 @@ def is_monochrome_icon_theme(icon_theme_name=None) -> bool:
     )
 
 
-def init_app_font(lang_code: Optional[str] = None) -> QFont:
+def init_app_font() -> QFont:
     """
     Initializes the primary application font.
-    Adapts font family and sizing based on active UI language (e.g. Bengali fonts for 'bn').
     Loads the bundled modern Inter font family from assets/fonts if available,
     with robust fallback to system UI fonts.
     Enforces OpenType tabular figures (tnum) for smooth numeric alignment across the entire UI.
     """
     from PyQt6.QtGui import QFontDatabase
-    from core.services.language_service import get_current_language_code
-
-    if lang_code is None:
-        lang_code = get_current_language_code()
-    lang_code = (lang_code or "system").lower()
-
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     fonts_dir = os.path.join(base_dir, "assets", "fonts")
     if os.path.isdir(fonts_dir):
@@ -856,71 +467,27 @@ def init_app_font(lang_code: Optional[str] = None) -> QFont:
                 QFontDatabase.addApplicationFont(os.path.join(fonts_dir, font_file))
 
     available = set(QFontDatabase.families())
-
-    font_size = 9
-    if lang_code == "bn" or (lang_code == "system" and "bn" in QLocale.system().name().lower()):
-        # Cross-platform Bengali system fonts (Linux, Windows, macOS)
-        candidates = [
-            # Linux system fonts
-            "Hind Siliguri", "Kalpurush", "Noto Sans Bengali", "Nikosh",
-            "SolaimanLipi", "Mitra", "Mukti", "Akaash", "Bangla",
-            # Windows native fonts
-            "Nirmala UI", "Vrinda",
-            # macOS native fonts
-            "Bangla Sangam MN", "Kohinoor Bangla",
-            # General UI fallbacks
-            "Inter", "Segoe UI", "Noto Sans", "Ubuntu", "DejaVu Sans"
-        ]
-        font_size = 10  # Bengali text is much more legible at 10pt
-    elif lang_code in ("ar", "fa", "ur"):
-        candidates = [
-            "Noto Sans Arabic", "Segoe UI", "Tahoma", "Geeza Pro",
-            "Inter", "Ubuntu", "DejaVu Sans"
-        ]
-        font_size = 10
-    elif lang_code in ("zh_cn", "zh_tw", "ja", "ko"):
-        candidates = [
-            "Noto Sans CJK SC", "Noto Sans CJK TC", "Noto Sans CJK JP", "Noto Sans CJK KR",
-            "Microsoft YaHei", "PingFang SC", "Meiryo", "Malgun Gothic",
-            "Inter", "Segoe UI", "Noto Sans"
-        ]
-    else:
-        candidates = ["Inter", "Segoe UI", "Noto Sans", "Ubuntu", "Cantarell", "Liberation Sans", "DejaVu Sans"]
-
+    candidates = ["Inter", "Segoe UI", "Noto Sans", "Ubuntu", "Cantarell", "Liberation Sans", "DejaVu Sans"]
     chosen_family = "Inter"
     for candidate in candidates:
         if candidate in available:
             chosen_family = candidate
             break
 
-    app_font = QFont(chosen_family, font_size)
-    app_font.setFamilies(candidates)
+    app_font = QFont(chosen_family, 9)
     app_font.setFeature(QFont.Tag.fromString('tnum'), 1)
     app_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
     return app_font
 
 
-def apply_app_theme(theme_name, accent_name=None, icon_theme_name=None, tray_icon_name=None, app=None, title_bar_mode=None):
+def apply_app_theme(theme_name, accent_name=None, icon_theme_name=None, tray_icon_name=None, app=None):
     """
-    Applies application theme, custom accent color, custom toolbar icon set, custom system tray icon set, and title bar theme.
+    Applies application theme, custom accent color, custom toolbar icon set, and custom system tray icon set.
     """
-    if not isinstance(app, QApplication) and app is not None and title_bar_mode is None:
-        title_bar_mode = app
-        app = None
-
-    global CURRENT_THEME, CURRENT_TITLE_BAR_MODE
-    CURRENT_THEME = str(theme_name).strip()
-    if title_bar_mode is not None:
-        CURRENT_TITLE_BAR_MODE = normalize_titlebar_name(title_bar_mode)
-
     if app is None:
         app = QApplication.instance()
     if not app:
         return
-
-    global _THEME_CHANGE_ACTIVE
-    _THEME_CHANGE_ACTIVE = True
-    QTimer.singleShot(250, _clear_theme_change_active)
 
     sh = app.styleHints()
     theme_lower = str(theme_name).strip().lower()
@@ -993,18 +560,6 @@ def apply_app_theme(theme_name, accent_name=None, icon_theme_name=None, tray_ico
         if hasattr(sh, "setColorScheme") and hasattr(Qt, "ColorScheme"):
             sh.setColorScheme(Qt.ColorScheme.Light)
         app.setPalette(_build_palette("#eff0f1", "#232629", "#fcfcfc", "#eef0f2", "#eef0f2", "#2980b9", "#3daee9", "#ffffff", accent=accent_name))
-    elif theme_lower in ("stellar dark", "stellardark"):
-        if hasattr(sh, "setColorScheme") and hasattr(Qt, "ColorScheme"):
-            sh.setColorScheme(Qt.ColorScheme.Dark)
-        app.setPalette(_build_palette("#1c1c1c", "#e0e0e0", "#1e1e1e", "#252525", "#222222", "#66a3f0", "#4488dd", "#ffffff", accent=accent_name))
-    elif theme_lower in ("stellar light", "stellarlight"):
-        if hasattr(sh, "setColorScheme") and hasattr(Qt, "ColorScheme"):
-            sh.setColorScheme(Qt.ColorScheme.Light)
-        app.setPalette(_build_palette("#f0f0f0", "#1a1a1a", "#ffffff", "#f7f7f7", "#e8e8e8", "#4488dd", "#4488dd", "#ffffff", accent=accent_name))
-    elif theme_lower in ("tmog dark", "tmog", "tmogdark", "cyberpunk tmog", "cyber tmog", "cyber"):
-        if hasattr(sh, "setColorScheme") and hasattr(Qt, "ColorScheme"):
-            sh.setColorScheme(Qt.ColorScheme.Dark)
-        app.setPalette(_build_palette("#0c1017", "#eaf2fd", "#080c12", "#111722", "#151d2a", "#00e5ff", "#00b4d8", "#000000", accent=accent_name))
     elif theme_lower in ("bdm light", "bdmlight", "light"):
         if hasattr(sh, "setColorScheme") and hasattr(Qt, "ColorScheme"):
             sh.setColorScheme(Qt.ColorScheme.Light)
@@ -1025,20 +580,32 @@ def apply_app_theme(theme_name, accent_name=None, icon_theme_name=None, tray_ico
             p.setColor(QPalette.ColorRole.Highlight, QColor(ACCENT_COLORS[accent_name]))
             p.setColor(QPalette.ColorRole.Link, QColor(ACCENT_COLORS[accent_name]))
             app.setPalette(p)
-    elif theme_lower in ("bdm dark", "bdmdark", "dark"):
-        if hasattr(sh, "setColorScheme") and hasattr(Qt, "ColorScheme"):
-            sh.setColorScheme(Qt.ColorScheme.Dark)
-        app.setPalette(_build_palette("#202326", "#eff0f1", "#141618", "#1c1e20", "#2a2e32", "#3daee9", "#3daee9", "#ffffff", accent=accent_name))
-    else:  # BDM Auto (Default) / Default Fallback
+    elif theme_lower in ("bdm auto (default)", "bdm auto", "bdmauto", "automatic", "auto"):
         if hasattr(sh, "setColorScheme") and hasattr(Qt, "ColorScheme"):
             sh.setColorScheme(Qt.ColorScheme.Unknown)
         
-        is_sys_dark = is_system_dark_theme(app)
+        is_sys_dark = False
+        if hasattr(sh, "colorScheme"):
+            cs = sh.colorScheme()
+            if cs == Qt.ColorScheme.Dark:
+                is_sys_dark = True
+            elif cs == Qt.ColorScheme.Light:
+                is_sys_dark = False
+            else:
+                sys_pal = app.style().standardPalette()
+                is_sys_dark = sys_pal.color(QPalette.ColorRole.Window).value() < 128 or sys_pal.color(QPalette.ColorRole.WindowText).value() > 128
+        else:
+            sys_pal = app.style().standardPalette()
+            is_sys_dark = sys_pal.color(QPalette.ColorRole.Window).value() < 128 or sys_pal.color(QPalette.ColorRole.WindowText).value() > 128
 
         if is_sys_dark:
             app.setPalette(_build_palette("#202326", "#eff0f1", "#141618", "#1c1e20", "#2a2e32", "#3daee9", "#3daee9", "#ffffff", accent=accent_name))
         else:
             app.setPalette(_build_palette("#eff0f1", "#232629", "#ffffff", "#f8f9fa", "#eef0f2", "#3daee9", "#3daee9", "#ffffff", accent=accent_name))
+    else:  # BDM Dark (Default) / Default
+        if hasattr(sh, "setColorScheme") and hasattr(Qt, "ColorScheme"):
+            sh.setColorScheme(Qt.ColorScheme.Dark)
+        app.setPalette(_build_palette("#202326", "#eff0f1", "#141618", "#1c1e20", "#2a2e32", "#3daee9", "#3daee9", "#ffffff", accent=accent_name))
 
     # Icon theme handling
     global CURRENT_ICON_THEME, CURRENT_TRAY_ICON
@@ -1052,7 +619,7 @@ def apply_app_theme(theme_name, accent_name=None, icon_theme_name=None, tray_ico
     else:
         CURRENT_TRAY_ICON = "App Icon (Default)"
 
-    if icon_theme_name and str(icon_theme_name).lower() not in ("automatic", "bdm", "bdm auto (default)", "bdm auto", "bdmauto", "bdm (default)", "bdm dark", "bdmdark", "bdm light", "bdmlight", "modern color", "modern", "prism", "color", "vivid", "vibrant", "yaru", "ubuntu yaru", "stellar", "stellar icons", "stellaricons", "tmog neon", "tmog", "tmogneon", "cyber neon", "cyberneon", "cyber"):
+    if icon_theme_name and str(icon_theme_name).lower() not in ("automatic", "bdm", "bdm auto (default)", "bdm auto", "bdmauto", "bdm (default)", "bdm dark", "bdmdark", "bdm light", "bdmlight", "modern color", "modern", "prism", "color", "vivid", "vibrant", "yaru", "ubuntu yaru"):
         icon_lower = str(icon_theme_name).strip().lower()
         icon_map = {
             "breeze": "breeze",
@@ -1067,13 +634,8 @@ def apply_app_theme(theme_name, accent_name=None, icon_theme_name=None, tray_ico
     else:
         ensure_adaptive_icon_theme(app)
 
-    app.setStyleSheet("""
-            QMainWindow#MainWindow {
-                border: 1px solid palette(mid);
-            }
-            QDialog {
-                border: 1px solid palette(mid);
-            }
+    if not app.styleSheet():
+        app.setStyleSheet("""
             QMenuBar {
                 background-color: palette(window);
                 color: palette(window-text);
@@ -1094,7 +656,7 @@ def apply_app_theme(theme_name, accent_name=None, icon_theme_name=None, tray_ico
             QMenu {
                 background-color: palette(window);
                 color: palette(window-text);
-                border: 1px solid palette(highlight);
+                border: 1px solid palette(mid);
                 padding: 4px;
             }
             QMenu::item {
@@ -1167,16 +729,6 @@ def apply_app_theme(theme_name, accent_name=None, icon_theme_name=None, tray_ico
                 color: #000000;
                 background-color: palette(highlight);
             }
-            QSplitter::handle:horizontal {
-                background-color: palette(window);
-            }
-            QToolTip {
-                background-color: palette(alternate-base);
-                color: palette(window-text);
-                border: 1px solid palette(mid);
-                padding: 4px 6px;
-                border-radius: 4px;
-            }
         """)
 
     for w in app.allWidgets():
@@ -1187,9 +739,6 @@ def apply_app_theme(theme_name, accent_name=None, icon_theme_name=None, tray_ico
             w.update()
         except Exception:
             pass
-
-    # Apply Title bar theme
-    apply_titlebar_theme(CURRENT_TITLE_BAR_MODE, app=app)
 
     for top in app.topLevelWidgets():
         try:
@@ -1238,7 +787,6 @@ FREEDESKTOP_MAP = {
     "resume": ["media-playback-start", "go-down", "start"],
     "stop": ["process-stop", "media-playback-stop", "stop"],
     "stop_all": ["process-stop", "media-playback-stop", "stop"],
-    "stop_all_queues": ["process-stop", "media-playback-stop", "stop"],
     "delete": ["user-trash", "edit-delete", "delete"],
     "clear_completed": ["edit-clear-all", "edit-clear", "clear"],
     "options": ["preferences-system", "configure", "settings"],
@@ -1253,8 +801,7 @@ FREEDESKTOP_MAP = {
     "finished": ["emblem-default", "dialog-ok", "check"],
     "exit": ["application-exit", "system-log-out", "exit"],
     "show_hide": ["window-new", "view-restore", "go-home"],
-    "scheduler": ["chronometer", "appointment-soon", "alarm-clock"],
-    "grabber": ["applications-internet", "web-browser", "download"]
+    "scheduler": ["chronometer", "appointment-soon", "alarm-clock"]
 }
 
 
@@ -1267,21 +814,13 @@ def get_themed_icon(name: str, fallback=None, glow: bool = False) -> QIcon:
     icon_theme = CURRENT_ICON_THEME if CURRENT_ICON_THEME else "BDM Auto (Default)"
     icon_theme_lower = str(icon_theme).strip().lower()
 
-    if icon_theme_lower in ("colorful", "bdm colorful", "modern color", "modern", "prism", "prism color", "vivid", "color", "vibrant"):
+    if icon_theme_lower in ("colorful", "bdm colorful"):
         from ui.icons import get_colorful_icon
         return get_colorful_icon(name)
 
     if icon_theme_lower in ("yaru", "ubuntu yaru"):
         from ui.icons import get_yaru_icon
         return get_yaru_icon(name)
-
-    if icon_theme_lower in ("stellar", "stellar icons", "stellaricons"):
-        from ui.icons import get_stellar_icon
-        return get_stellar_icon(name)
-
-    if icon_theme_lower in ("tmog neon", "tmog", "tmogneon", "cyber neon", "cyberneon", "cyber"):
-        from ui.icons import get_tmog_icon
-        return get_tmog_icon(name)
 
     if icon_theme_lower not in ("automatic", "bdm", "bdm auto (default)", "bdm auto", "bdmauto", "bdm (default)", "bdm dark", "bdmdark", "bdm light", "bdmlight"):
         aliases = FREEDESKTOP_MAP.get(name, [name])
@@ -1302,7 +841,14 @@ def get_themed_icon(name: str, fallback=None, glow: bool = False) -> QIcon:
         icon = get_monochrome_icon(name, color=QColor("#232629"), selected_color=QColor("#000000"), glow=glow)
     else:
         app = QApplication.instance()
-        if is_dark_theme(app):
+        is_dark = False
+        if app:
+            pal = app.palette()
+            bg_val = pal.color(QPalette.ColorRole.Window).value()
+            fg_val = pal.color(QPalette.ColorRole.WindowText).value()
+            if bg_val < 128 or fg_val > 128:
+                is_dark = True
+        if is_dark:
             icon = get_monochrome_icon(name, color=QColor("#ffffff"), selected_color=QColor("#000000"), glow=glow)
         else:
             icon = get_monochrome_icon(name, color=QColor("#232629"), selected_color=QColor("#000000"), glow=glow)
@@ -1358,9 +904,9 @@ def get_app_icon() -> QIcon:
 
         # 2. Snap — $SNAP hicolor icons (installed by snapcraft override-build)
         *([
-            os.path.join(_snap, "usr", "share", "icons", "hicolor", "scalable", "apps", "bd.com.zihad.BengalDownloadManager.svg"),
-            os.path.join(_snap, "usr", "share", "icons", "hicolor", "512x512", "apps", "bd.com.zihad.BengalDownloadManager.png"),
-            os.path.join(_snap, "usr", "share", "icons", "hicolor", "256x256", "apps", "bd.com.zihad.BengalDownloadManager.png"),
+            os.path.join(_snap, "usr", "share", "icons", "hicolor", "scalable", "apps", "io.github.tazihad.bengal-download-manager.svg"),
+            os.path.join(_snap, "usr", "share", "icons", "hicolor", "512x512", "apps", "io.github.tazihad.bengal-download-manager.png"),
+            os.path.join(_snap, "usr", "share", "icons", "hicolor", "256x256", "apps", "io.github.tazihad.bengal-download-manager.png"),
         ] if _snap else []),
 
         # 3. Snap — $SNAP_APP_ROOT bundled assets (exported by bengal-wrapper.sh)
@@ -1372,29 +918,29 @@ def get_app_icon() -> QIcon:
         ] if _snap_root else []),
 
         # 4. Flatpak — /app hicolor (fixed path per Flatpak spec)
-        "/app/share/icons/hicolor/scalable/apps/bd.com.zihad.BengalDownloadManager.svg",
-        "/app/share/icons/hicolor/512x512/apps/bd.com.zihad.BengalDownloadManager.png",
-        "/app/share/icons/hicolor/256x256/apps/bd.com.zihad.BengalDownloadManager.png",
-        "/app/share/icons/hicolor/128x128/apps/bd.com.zihad.BengalDownloadManager.png",
+        "/app/share/icons/hicolor/scalable/apps/io.github.tazihad.bengal-download-manager.svg",
+        "/app/share/icons/hicolor/512x512/apps/io.github.tazihad.bengal-download-manager.png",
+        "/app/share/icons/hicolor/256x256/apps/io.github.tazihad.bengal-download-manager.png",
+        "/app/share/icons/hicolor/128x128/apps/io.github.tazihad.bengal-download-manager.png",
 
         # 5. AppImage — $APPDIR hicolor
         *([
-            os.path.join(_appdir, "usr", "share", "icons", "hicolor", "scalable", "apps", "bd.com.zihad.BengalDownloadManager.svg"),
-            os.path.join(_appdir, "usr", "share", "icons", "hicolor", "512x512", "apps", "bd.com.zihad.BengalDownloadManager.png"),
-            os.path.join(_appdir, "usr", "share", "icons", "hicolor", "256x256", "apps", "bd.com.zihad.BengalDownloadManager.png"),
+            os.path.join(_appdir, "usr", "share", "icons", "hicolor", "scalable", "apps", "io.github.tazihad.bengal-download-manager.svg"),
+            os.path.join(_appdir, "usr", "share", "icons", "hicolor", "512x512", "apps", "io.github.tazihad.bengal-download-manager.png"),
+            os.path.join(_appdir, "usr", "share", "icons", "hicolor", "256x256", "apps", "io.github.tazihad.bengal-download-manager.png"),
             os.path.join(_appdir, "usr", "share", "icons", "hicolor", "256x256", "apps", "bengal-download-manager.png"),
-            os.path.join(_appdir, "bd.com.zihad.BengalDownloadManager.png"),
+            os.path.join(_appdir, "io.github.tazihad.bengal-download-manager.png"),
         ] if _appdir else []),
 
         # 6. Standard system hicolor (deb / rpm / manual install)
-        "/usr/share/icons/hicolor/scalable/apps/bd.com.zihad.BengalDownloadManager.svg",
-        "/usr/share/icons/hicolor/256x256/apps/bd.com.zihad.BengalDownloadManager.png",
-        "/usr/local/share/icons/hicolor/scalable/apps/bd.com.zihad.BengalDownloadManager.svg",
-        "/usr/local/share/icons/hicolor/256x256/apps/bd.com.zihad.BengalDownloadManager.png",
+        "/usr/share/icons/hicolor/scalable/apps/io.github.tazihad.bengal-download-manager.svg",
+        "/usr/share/icons/hicolor/256x256/apps/io.github.tazihad.bengal-download-manager.png",
+        "/usr/local/share/icons/hicolor/scalable/apps/io.github.tazihad.bengal-download-manager.svg",
+        "/usr/local/share/icons/hicolor/256x256/apps/io.github.tazihad.bengal-download-manager.png",
 
         # 7. User XDG local icons
-        os.path.expanduser("~/.local/share/icons/hicolor/scalable/apps/bd.com.zihad.BengalDownloadManager.svg"),
-        os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps/bd.com.zihad.BengalDownloadManager.png"),
+        os.path.expanduser("~/.local/share/icons/hicolor/scalable/apps/io.github.tazihad.bengal-download-manager.svg"),
+        os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps/io.github.tazihad.bengal-download-manager.png"),
 
         # 8. sys.argv[0]-relative fallback (runtime-stable; works for snap, dev, any install layout)
         *([
@@ -1425,7 +971,7 @@ def get_app_icon() -> QIcon:
                 return icon
 
     # Theme icon fallbacks
-    for theme_name in ["bd.com.zihad.BengalDownloadManager", "bengal-download-manager"]:
+    for theme_name in ["io.github.tazihad.bengal-download-manager", "bengal-download-manager"]:
         icon = QIcon.fromTheme(theme_name)
         if not icon.isNull():
             return icon
@@ -1463,8 +1009,8 @@ def get_monochrome_app_icon(color=None, size=24) -> QIcon:
     return ic
 
 
-def resolve_asset(filename: str) -> str:
-    """Finds asset path across snap, Flatpak, AppImage, and local environments."""
+def _resolve_tray_asset(filename: str) -> str:
+    """Finds tray icon asset path across snap, Flatpak, AppImage, and local environments."""
     _meipass   = getattr(sys, "_MEIPASS", None)
     _snap      = os.environ.get("SNAP")
     _snap_root = os.environ.get("SNAP_APP_ROOT") or (os.path.join(_snap, "share", "bengal-download-manager") if _snap else None)
@@ -1504,9 +1050,6 @@ def resolve_asset(filename: str) -> str:
     return ""
 
 
-_resolve_tray_asset = resolve_asset
-
-
 def get_themed_tray_icon(tray_option=None) -> QIcon:
     """Resolves system tray icon based on tray icon theme selection."""
     global CURRENT_TRAY_ICON
@@ -1514,19 +1057,8 @@ def get_themed_tray_icon(tray_option=None) -> QIcon:
         tray_option = CURRENT_TRAY_ICON if CURRENT_TRAY_ICON else "App Icon (Default)"
 
     opt_lower = str(tray_option).strip().lower()
-
-    light_path = (
-        _resolve_tray_asset("icons/tray/tray_monochrome_light.svg")
-        or _resolve_tray_asset("icons/tray/tray_monochrome_light.png")
-        or _resolve_tray_asset("tray_monochrome_light.svg")
-        or _resolve_tray_asset("tray_monochrome_light.png")
-    )
-    dark_path = (
-        _resolve_tray_asset("icons/tray/tray_monochrome_dark.svg")
-        or _resolve_tray_asset("icons/tray/tray_monochrome_dark.png")
-        or _resolve_tray_asset("tray_monochrome_dark.svg")
-        or _resolve_tray_asset("tray_monochrome_dark.png")
-    )
+    light_path = _resolve_tray_asset("tray_monochrome_light.png")
+    dark_path = _resolve_tray_asset("tray_monochrome_dark.png")
 
     if opt_lower in ("app icon (default)", "app icon", "app_icon", "bdm app icon"):
         icon = get_app_icon()
@@ -1563,14 +1095,23 @@ def get_themed_tray_icon(tray_option=None) -> QIcon:
     return QIcon()
 
 
-from core.categories import (
-    CATEGORY_EXTENSIONS,
-    get_category_for_filename,
-    get_all_categories,
-    format_timestamp_relative,
-    parse_size_to_bytes,
-    parse_time_to_sec,
-)
+CATEGORY_EXTENSIONS = {
+    "Compressed": [".zip", ".rar", ".7z", ".tar", ".gz", ".iso", ".bz2", ".xz", ".tgz"],
+    "Documents": [".pdf", ".doc", ".docx", ".txt", ".ppt", ".pptx", ".xls", ".xlsx", ".csv", ".rtf", ".odt"],
+    "Music": [".mp3", ".wav", ".aac", ".flac", ".ogg", ".m4a", ".wma"],
+    "Programs": [".exe", ".msi", ".deb", ".rpm", ".apk", ".appimage", ".flatpak", ".snap", ".sh", ".bin", ".bat", ".cmd", ".run", ".dmg", ".pkg", ".jar", ".msu"],
+    "Video": [".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v"]
+}
+
+
+def get_category_for_filename(filename: str) -> str:
+    if not filename:
+        return "General"
+    fn = filename.lower()
+    for cat, exts in CATEGORY_EXTENSIONS.items():
+        if any(fn.endswith(ext) for ext in exts):
+            return cat
+    return "General"
 
 
 def get_file_icon(filename: str) -> QIcon:
@@ -1617,3 +1158,57 @@ def get_file_icon(filename: str) -> QIcon:
     }
     return fallbacks.get(cat, QApplication.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
 
+
+def format_timestamp_relative(timestamp_str: str, max_relative_seconds: int = 30) -> str: 
+    if not timestamp_str or timestamp_str == "...":
+        return "..."
+        
+    try:
+        timestamp_float = float(timestamp_str)
+    except ValueError:
+        return timestamp_str
+    
+    current_time = time.time()
+    diff = current_time - timestamp_float
+    
+    if diff < 60:
+        return "Just now"
+    elif diff < max_relative_seconds:
+        minutes_ago = int(diff // 60)
+        if minutes_ago == 0:
+            return "Just now"
+        return f"{minutes_ago} min ago"
+    else:
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp_float))
+
+
+def parse_size_to_bytes(text: str) -> float:
+    try:
+        if not text or text == "...":
+            return 0.0
+        parts = text.split()
+        val = float(parts[0])
+        unit = parts[1].upper() if len(parts) > 1 else ""
+        multipliers = {'B': 1, 'K': 1024, 'KB': 1024, 'M': 1024**2, 'MB': 1024**2, 'G': 1024**3, 'GB': 1024**3}
+        for key, mult in multipliers.items():
+            if unit.startswith(key):
+                return val * mult
+        return val
+    except Exception:
+        return 0.0
+
+
+def parse_time_to_sec(text: str) -> float:
+    try:
+        if not text or text == "...":
+            return 0.0
+        parts = text.split()
+        val = float(parts[0])
+        unit = parts[1].lower() if len(parts) > 1 else ""
+        if 'hr' in unit:
+            return val * 3600
+        if 'min' in unit:
+            return val * 60
+        return val 
+    except Exception:
+        return 0.0

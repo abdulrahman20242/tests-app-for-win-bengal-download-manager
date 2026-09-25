@@ -1,14 +1,11 @@
 import time
 import os
 import random
-import logging
 from urllib.parse import urlparse, unquote
 from PyQt6.QtCore import QThread, pyqtSignal
-from core.utils import get_unique_filepath, load_extension_config, call_aria2_rpc, resolve_filename, is_debug_mode
+from core.utils import get_unique_filepath, load_extension_config, call_aria2_rpc, resolve_filename
 
 import shutil
-
-logger = logging.getLogger("bengal.worker.aria2")
 
 class Aria2Worker(QThread):
     main_progress_signal = pyqtSignal(int, tuple) 
@@ -18,11 +15,10 @@ class Aria2Worker(QThread):
     segment_update_signal = pyqtSignal(int, object, object, float, str) 
     init_segments_signal = pyqtSignal(int) 
 
-    def __init__(self, url, download_id=0, save_dir="", resume_filename=None, user_agent=None, cookies=None, temp_dir=None, referrer=None, allow_resume=True, **kwargs):
+    def __init__(self, url, row_index, save_dir, resume_filename=None, user_agent=None, cookies=None, temp_dir=None, referrer=None, allow_resume=True):
         super().__init__()
         self.url = url
-        self.download_id = kwargs.get("row_index", download_id)
-        self.row_index = self.download_id
+        self.row_index = row_index
         self.save_dir = save_dir
         self.temp_dir = temp_dir
         self.user_agent = user_agent
@@ -33,8 +29,8 @@ class Aria2Worker(QThread):
         self.gid = None
         
         ext_data = load_extension_config()
-        self.rpc_port = kwargs.get("rpc_port") if kwargs.get("rpc_port") is not None else ext_data.get("port", 56800)
-        self.rpc_token = kwargs.get("rpc_token") if kwargs.get("rpc_token") is not None else ext_data.get("token", "")
+        self.rpc_port = ext_data.get("port", 56800)
+        self.rpc_token = ext_data.get("token", "")
         self.rpc_url = f"http://127.0.0.1:{self.rpc_port}/jsonrpc"
         
         if resume_filename:
@@ -57,9 +53,6 @@ class Aria2Worker(QThread):
 
         self.target_path = self.target_path
         self.generation = 0
-        if is_debug_mode():
-            logger.debug("[Aria2Worker] Initialized row=%d: url=%s, target=%s, rpc_port=%s",
-                         self.row_index, self.url, self.target_path, self.rpc_port)
 
     def call_rpc(self, method, params=None):
         return call_aria2_rpc(method, params=params, port=self.rpc_port, token=self.rpc_token)
@@ -125,14 +118,10 @@ class Aria2Worker(QThread):
         self.gid = self.call_rpc("aria2.addUri", params)
         
         if not self.gid:
-            logger.error("[Aria2Worker] Failed to communicate with Aria2 RPC to add URL: %s", self.url)
             self.log_signal.emit("Failed to communicate with Aria2 RPC.")
             self.finished_signal.emit(self.row_index, "Error")
             return
 
-        if is_debug_mode():
-            logger.debug("[Aria2Worker] GID %s queued in aria2 for row %d (url: %s, file: %s)",
-                         self.gid, self.row_index, self.url, self.filename)
         self.log_signal.emit(f"Download started via Aria2 (GID: {self.gid[:6]})")
         
         max_conn_int = max_conn_val
@@ -141,46 +130,11 @@ class Aria2Worker(QThread):
         active_indices = []
         last_update_time = time.time()
         
-        consecutive_failures = 0
         while self.is_running:
             status = self.call_rpc("aria2.tellStatus", [self.gid])
             if not status:
-                consecutive_failures += 1
-                if consecutive_failures >= 5:
-                    logger.warning("[Aria2Worker] GID %s lost after 5 consecutive status failures", self.gid)
-                    file_to_check = self.target_path if os.path.exists(self.target_path) else os.path.join(self.working_dir, self.filename)
-                    if os.path.exists(file_to_check) and os.path.getsize(file_to_check) > 0 and not os.path.exists(file_to_check + ".aria2"):
-                        total_length = os.path.getsize(file_to_check)
-                        logger.info("[Aria2Worker] Target file %s is intact (%d bytes). Completing download.", file_to_check, total_length)
-                        self.log_signal.emit("Aria2 download verified and completed.")
-                        if file_to_check != self.target_path:
-                            try:
-                                if os.path.exists(self.target_path):
-                                    os.remove(self.target_path)
-                                shutil.move(file_to_check, self.target_path)
-                            except Exception as move_err:
-                                logger.error("[Aria2Worker] Error moving file to final destination: %s", move_err)
-                        self.main_progress_signal.emit(self.row_index, (
-                            self.filename,
-                            self.format_bytes(total_length, precision=2, pad=False),
-                            "Complete",
-                            "",
-                            "",
-                            total_length,
-                            total_length,
-                            0,
-                            getattr(self, 'generation', 0)
-                        ))
-                        self.main_bar_signal.emit(total_length, total_length)
-                        self.finished_signal.emit(self.row_index, "Complete")
-                    else:
-                        self.log_signal.emit("Download lost or failed in Aria2 engine.")
-                        self.finished_signal.emit(self.row_index, "Error")
-                    break
                 time.sleep(1)
                 continue
-
-            consecutive_failures = 0
 
             total_length = int(status.get("totalLength", 0))
             completed_length = int(status.get("completedLength", 0))
@@ -324,8 +278,6 @@ class Aria2Worker(QThread):
                 self.segment_update_signal.emit(0, completed_length, total_length, download_speed, display_state)
 
             if state == "complete":
-                if is_debug_mode():
-                    logger.debug("[Aria2Worker] GID %s reached 100%% complete: total=%d bytes", self.gid, total_length)
                 self.log_signal.emit("Aria2 download completed successfully.")
                 
                 # Move file from working_dir (temp) to final save_dir if different
@@ -344,13 +296,9 @@ class Aria2Worker(QThread):
                             if os.path.exists(control_file):
                                 os.remove(control_file)
                     except Exception as e:
-                        logger.error("[Aria2Worker] Error moving file to final destination: %s", e)
                         self.log_signal.emit(f"Error moving file to final destination: {e}")
                         self.finished_signal.emit(self.row_index, "Error")
                         break
-
-                if is_debug_mode():
-                    logger.debug("[Aria2Worker] Finalized target file: %s", self.target_path)
 
                 self.main_progress_signal.emit(self.row_index, (
                     self.filename,
@@ -366,10 +314,6 @@ class Aria2Worker(QThread):
                 self.finished_signal.emit(self.row_index, "Complete")
                 break
             elif state in ["error", "removed"]:
-                err_code = status.get("errorCode", "unknown") if status else "unknown"
-                err_msg = status.get("errorMessage", "") if status else ""
-                logger.error("[Aria2Worker] GID %s stopped with state=%s (errorCode=%s, errorMsg=%s)",
-                             self.gid, state, err_code, err_msg)
                 self.log_signal.emit(f"Aria2 download stopped: {state}")
                 self.finished_signal.emit(self.row_index, "Error" if state == "error" else "Cancelled")
                 break
@@ -383,8 +327,6 @@ class Aria2Worker(QThread):
     def stop(self):
         self.is_running = False
         if self.gid:
-            if is_debug_mode():
-                logger.debug("[Aria2Worker] Stopping GID %s", self.gid)
             self.call_rpc("aria2.remove", [self.gid])
             self.log_signal.emit("Removing download from Aria2...")
 
@@ -393,8 +335,6 @@ class Aria2Worker(QThread):
         self.is_paused = True
         self.is_resuming = False
         if self.gid:
-            if is_debug_mode():
-                logger.debug("[Aria2Worker] Pausing GID %s", self.gid)
             self.call_rpc("aria2.pause", [self.gid])
             self.log_signal.emit("Pausing download in Aria2...")
 
@@ -404,8 +344,6 @@ class Aria2Worker(QThread):
         self.is_resuming = True
         self.paused_logged = False
         if self.gid:
-            if is_debug_mode():
-                logger.debug("[Aria2Worker] Resuming GID %s", self.gid)
             self.call_rpc("aria2.unpause", [self.gid])
             self.log_signal.emit("Resuming download in Aria2...")
 

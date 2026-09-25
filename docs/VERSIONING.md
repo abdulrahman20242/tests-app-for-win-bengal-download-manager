@@ -8,10 +8,9 @@ This document defines the authoritative versioning architecture, release lifecyc
 
 Bengal Download Manager targets multiple distribution channels:
 * **Canonical Snap Store**: Snap package built via Snapcraft (`snap/snapcraft.yaml`).
-* **Flatpak / Flathub**: Flatpak bundle and AppStream catalog metadata (`flatpak/bd.com.zihad.BengalDownloadManager.metainfo.xml`).
-* **Python Packaging (PEP 517/518/621)**: Package manifest and dynamic versioning (`pyproject.toml`).
+* **Flatpak / Flathub**: Flatpak bundle and AppStream catalog metadata (`flatpak/io.github.tazihad.bengal-download-manager.metainfo.xml`).
 * **In-App Runtime**: Help -> About Dialog, CLI `--version`, and IPC daemon (`src/core/version.py`).
-* *(Note: Browser extension in `extension/manifest.json` is versioned independently, e.g. `0.6`).*
+* *(Note: Browser extension in `extension/manifest.json` is versioned independently, e.g. `0.4`).*
 
 ### The Canonical File
 The root file **`VERSION`** is the single authoritative source of truth for the application version. No other file should be edited manually to change versions.
@@ -115,12 +114,12 @@ git commit -am "chore: graduate version to stable release"
 
 ## 3. How Release Channels React to Your Push
 
-| Channel | Trigger Mechanism |
+| Channel | What Happens When You Push to `main` |
 |---|---|
-| **GitHub Releases** | Triggered only when a release tag (e.g. `v0.2.45`) is pushed or manually dispatched via `workflow_dispatch`. Merging PRs or pushing to branches never triggers a release. |
-| **Snap Store (snapcraft.io)** | Snapcraft.io's build service reads `version` from `snap/snapcraft.yaml` upon release tag push or build dispatch. |
-| **Flatpak / Flathub** | Uses the updated `<release version="..." .../>` in `bd.com.zihad.BengalDownloadManager.metainfo.xml`. |
-| **In-App (Help -> About)** | Automatically displays version from `VERSION` and `SNAP_VERSION`. |
+| **GitHub Releases** | GitHub Actions reads `VERSION`, builds all binaries (`AppImage`, `Flatpak`, `Snap`, `Standalone Binary`, `Extensions`), creates the GitHub release and tags `v0.2.25`. |
+| **Snap Store (snapcraft.io)** | Snapcraft.io's build service clones `main`, reads `version: '0.2.25'` directly from `snap/snapcraft.yaml`, builds and publishes `0.2.25` to the Snap Store. |
+| **Flatpak / Flathub** | Uses the updated `<release version="0.2.25" .../>` in `io.github.tazihad.bengal-download-manager.metainfo.xml`. |
+| **In-App (Help -> About)** | Automatically displays `0.2.25` from `VERSION` and `SNAP_VERSION`. |
 
 ---
 
@@ -129,11 +128,9 @@ git commit -am "chore: graduate version to stable release"
 1. **Pull Requests & Commits (`ci.yml`)**:
    - `python3 scripts/sync_version.py --check` automatically executes on every commit and PR.
    - If any manifest does not match `VERSION`, CI fails immediately with actionable instructions.
-   - Branch merges and pushes run tests and validation, but do not create releases.
 
 2. **Automated Builds & Releases (`release.yml`)**:
-   - Pushing release tags (`v*`) or manual `workflow_dispatch` triggers the release workflow.
-   - Merging to `main`, `dev`, or any other branch will NOT publish a release.
+   - Pushes to `main` (stable) or `dev` (alpha) trigger the release workflow.
    - The workflow reads the canonical `VERSION` file, produces all binaries and package formats with that exact version, and creates the GitHub Release.
 
 3. **Snap Store Synchronization**:
